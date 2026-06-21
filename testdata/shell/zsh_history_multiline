@@ -1,0 +1,7 @@
+: 1706012400:0;echo "starting multi-line command" \
+continuation line 1 \
+continuation line 2
+: 1706012410:0;simple command
+: 1706012420:0;for i in 1 2 3; do \
+echo $i \
+done

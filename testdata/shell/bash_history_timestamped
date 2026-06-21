@@ -1,0 +1,10 @@
+#1706012400
+ls -la
+#1706012410
+cd /var/log
+#1706012420
+grep error syslog
+#1706012430
+tail -f /var/log/system.log
+#1706012500
+exit

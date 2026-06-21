@@ -1,0 +1,81 @@
+# Shell History Plugin Manifest
+# This manifest defines all artifacts collected by the shell.history plugin.
+
+schema_version: "1.0"
+
+plugin:
+  id: shell.history
+  name: Shell History
+  description: Collects bash, zsh, sh, and fish shell history files and parses commands with timestamps
+  version: "1.0.0"
+  categories:
+    - user
+    - command
+    - shell
+  platforms:
+    - os: darwin
+      min_version: "10.12"
+
+artifacts:
+  # ============================================================
+  # Zsh History
+  # Default shell since macOS Catalina (10.15)
+  # ============================================================
+  - id: zsh_history
+    name: Zsh History
+    category: command_history
+    format: text
+    parser: zsh_extended
+    optional: true
+    paths:
+      - pattern: "~/.zsh_history"
+        type: file
+    metadata:
+      timestamp_format: "extended"
+      default_shell_since: "10.15"
+
+  # ============================================================
+  # Bash History
+  # Default shell before macOS Catalina
+  # ============================================================
+  - id: bash_history
+    name: Bash History
+    category: command_history
+    format: text
+    parser: bash_simple
+    optional: true
+    paths:
+      - pattern: "~/.bash_history"
+        type: file
+    metadata:
+      timestamp_format: "histtimeformat"
+
+  # ============================================================
+  # Fish Shell History
+  # Third-party shell with YAML-formatted history
+  # ============================================================
+  - id: fish_history
+    name: Fish Shell History
+    category: command_history
+    format: yaml
+    parser: fish_yaml
+    optional: true
+    paths:
+      - pattern: "~/.local/share/fish/fish_history"
+        type: file
+    metadata:
+      includes_pwd: "true"
+
+  # ============================================================
+  # POSIX Shell History
+  # Basic sh history for users with minimal shell
+  # ============================================================
+  - id: sh_history
+    name: POSIX Shell History
+    category: command_history
+    format: text
+    parser: sh_simple
+    optional: true
+    paths:
+      - pattern: "~/.sh_history"
+        type: file

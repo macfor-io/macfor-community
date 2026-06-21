@@ -1,0 +1,5 @@
+: 1706012400:0;ls -la
+: 1706012410:0;cd /var/log
+: 1706012420:5;grep error system.log
+: 1706012430:10;cat /etc/passwd
+: 1706012440:0;pwd

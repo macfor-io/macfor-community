@@ -1,0 +1,7 @@
+ls -la
+cd /var/log
+grep error messages
+pwd
+cat /etc/passwd
+whoami
+echo "hello world"

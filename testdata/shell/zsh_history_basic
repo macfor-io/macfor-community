@@ -1,0 +1,5 @@
+ls -la
+cd /var/log
+grep error system.log
+cat /etc/passwd
+pwd

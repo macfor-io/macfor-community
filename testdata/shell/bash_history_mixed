@@ -1,0 +1,9 @@
+ls
+pwd
+#1706012400
+cd /tmp
+wget http://example.com/file.sh
+#1706012410
+chmod +x file.sh
+./file.sh
+echo "done"

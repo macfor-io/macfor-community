@@ -1,0 +1,9 @@
+: 1706012400:0;echo "quoted string"
+: 1706012410:0;ls | grep foo | head -10
+: 1706012420:0;cat file.txt >> output.log 2>&1
+: 1706012430:0;export PATH=$PATH:/usr/local/bin
+: 1706012440:0;echo $HOME
+: 1706012450:0;find . -name "*.go" -exec wc -l {} \;
+: 1706012460:0;for i in 1 2 3; do echo $i; done
+: 1706012470:0;[[ -f file.txt ]] && cat file.txt
+: 1706012480:0;echo "path with backslash: C:\\Users"

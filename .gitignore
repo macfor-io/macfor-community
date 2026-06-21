@@ -1,0 +1,50 @@
+# Binaries
+bin/
+gen-macos-tree
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+/macfor
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+coverage.html
+
+# Dependency directories
+vendor/
+
+# Go workspace file
+go.work
+
+# IDE/Editor directories
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Evidence containers (these may be large and contain sensitive data)
+*.evidence
+evidence-container*.zip
+
+# Temporary files
+tmp/
+*.tmp
+*.temp
+
+# Debug files
+*.log
+debug/
+
+# Build cache
+.cache/

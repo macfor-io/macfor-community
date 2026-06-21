@@ -1,0 +1,6 @@
+: 1706012400:0;ls -la
+cd /tmp
+: 1706012410:0;pwd
+basic command
+: 1706012420:5;grep pattern file
+another basic command

@@ -1,0 +1,85 @@
+version: 2
+
+project_name: macfor
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: macfor
+    main: ./cmd/macfor
+    binary: macfor
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.buildTime={{.Date}}
+
+universal_binaries:
+  - id: macfor-universal
+    replace: false
+    name_template: macfor
+
+archives:
+  - id: macfor
+    name_template: >-
+      macfor_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    formats: [tar.gz]
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: 'checksums.txt'
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  use: github
+  sort: asc
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\(.+\))??!?:.+$'
+      order: 0
+    - title: Bug fixes
+      regexp: '^.*?fix(\(.+\))??!?:.+$'
+      order: 1
+    - title: Other
+      order: 999
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - '^ci:'
+
+release:
+  github:
+    owner: macfor-io
+    name: macfor-community
+  draft: true
+  prerelease: auto
+  header: |
+    ## macfor {{ .Version }}
+
+    Prebuilt binaries below are **unsigned**. macOS will quarantine them on
+    first run — remove the quarantine attribute with:
+
+    ```
+    xattr -dr com.apple.quarantine ./macfor
+    ```
+
+    See [README](https://github.com/macfor-io/macfor-community#readme) for
+    installation and usage.

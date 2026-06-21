@@ -1,0 +1,6 @@
+echo "Hello, World!"
+echo "日本語テスト"
+echo "Привет мир"
+echo "emoji test: 🎉 🚀 💻"
+grep -r "中文" ./docs/
+echo "café résumé naïve"

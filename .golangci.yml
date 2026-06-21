@@ -1,0 +1,116 @@
+# golangci-lint configuration for macfor.
+# See: https://golangci-lint.run/usage/configuration/
+
+version: "2"
+
+run:
+  timeout: 5m
+  modules-download-mode: readonly
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+linters:
+  enable:
+    # Default linters (enabled by default, listed for clarity).
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    # Additional linters.
+    - bodyclose
+    - dogsled
+    - errname
+    - errorlint
+    - exhaustive
+    - copyloopvar
+    - gochecknoinits
+    - goconst
+    - gocyclo
+    - godot
+    - goprintffuncname
+    - gosec
+    - nakedret
+    - nilerr
+    - noctx
+    - prealloc
+    - predeclared
+    - revive
+    - rowserrcheck
+    - sqlclosecheck
+    - unconvert
+    - unparam
+    - whitespace
+
+  settings:
+    gocyclo:
+      min-complexity: 25
+
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: exported
+        - name: increment-decrement
+        - name: var-naming
+        - name: package-comments
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: unexported-return
+        - name: indent-error-flow
+        - name: errorf
+
+    gosec:
+      excludes:
+        - G104 # Audit errors not checked (too noisy for some patterns).
+
+    staticcheck:
+      # Disable advisory "quickfix" rules (QF*) — these are opt-in refactoring
+      # suggestions, not correctness checks.
+      checks:
+        - "all"
+        - "-QF1012"
+
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      # Test files are expected to use repeated literals, construct paths from
+      # controlled input, and exercise otherwise-noisy patterns.
+      - path: _test\.go
+        linters:
+          - dupl
+          - gosec
+          - goconst
+          - gocyclo
+          - unparam
+      # Hardware-model reference-data tables: the repeated literals are data
+      # (product names shared by multiple model identifiers), not constants.
+      - path: (internal/sysinfo/models|pkg/macfor/sysinfo)\.go
+        linters:
+          - goconst
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+output:
+  formats:
+    text:
+      path: stdout
+      colors: true
+      print-linter-name: true
+      print-issued-lines: true

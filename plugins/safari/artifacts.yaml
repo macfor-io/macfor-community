@@ -1,0 +1,307 @@
+# Safari Browser Plugin Manifest
+# This manifest defines all artifacts collected by the browser.safari plugin.
+
+schema_version: "1.0"
+
+plugin:
+  id: browser.safari
+  name: Safari Browser
+  description: Collects Safari browsing history, downloads, bookmarks, cookies, extensions, local storage, and session data
+  version: "1.0.0"
+  categories:
+    - browser
+    - user
+    - web
+  platforms:
+    - os: darwin
+      min_version: "10.12"
+
+artifacts:
+  # ============================================================
+  # Browsing History
+  # Primary artifact - SQLite database with visit history
+  # ============================================================
+  - id: history
+    name: Browsing History
+    category: history
+    format: sqlite
+    paths:
+      - pattern: "~/Library/Safari/History.db"
+        type: file
+    related:
+      - "~/Library/Safari/History.db-wal"
+      - "~/Library/Safari/History.db-shm"
+    # Declarative extraction: the table mapper populates the HistoryVisit struct
+    # from these columns, replacing the hand-written SQL + row scan in history.go.
+    extract:
+      from: history_items
+      join: "JOIN history_visits ON history_visits.history_item = history_items.id"
+      order_by: "history_visits.visit_time ASC"
+      fields:
+        - { name: type, const: browser_history }
+        - { name: browser, const: safari }
+        - { name: user, context: username }
+        - { name: url, column: history_items.url }
+        - { name: title, column: history_visits.title }
+        - { name: visit_time, column: history_visits.visit_time, transform: coredata_timestamp }
+        - { name: visit_count, column: history_items.visit_count }
+        - { name: load_successful, column: history_visits.load_successful, transform: bool_from_int }
+        - { name: redirect_source, column: history_visits.redirect_source, optional: true }
+        - { name: redirect_destination, column: history_visits.redirect_destination, optional: true }
+        - { name: source_file, context: source_file }
+        - { name: history_item_id, column: history_items.id }
+        - { name: visit_id, column: history_visits.id }
+    schema:
+      # Safari 10-14 (macOS 10.12 - 10.15)
+      - os_range: ["10.12", "10.15"]
+        tables:
+          - history_items
+          - history_visits
+          - history_client_version
+        version_id: "10"
+      # Safari 15+ (macOS 11.0+) - Added tombstones for sync
+      - os_range: ["11.0", ""]
+        tables:
+          - history_items
+          - history_visits
+          - history_client_version
+          - history_tombstones
+        new_columns:
+          history_visits:
+            - tab_group_uuid
+        version_id: "15"
+
+  # ============================================================
+  # Downloads
+  # Binary plist with download records
+  # ============================================================
+  - id: downloads
+    name: Downloads
+    category: downloads
+    format: binary_plist
+    optional: true
+    paths:
+      - pattern: "~/Library/Safari/Downloads.plist"
+        type: file
+    # Declarative extraction: one record per DownloadHistory element (with array
+    # root fallback for legacy/test data). file_name is basename(path); state is
+    # derived from the byte counts via the safari.download_state escape hatch.
+    extract:
+      records: DownloadHistory
+      fields:
+        - { name: type, const: browser_download }
+        - { name: browser, const: safari }
+        - { name: user, context: username }
+        - { name: url, key: DownloadEntryURL }
+        - { name: local_path, key: DownloadEntryPath }
+        - { name: file_name, key: DownloadEntryPath, transform: basename }
+        - { name: total_bytes, key: DownloadEntryProgressTotalToLoad }
+        - { name: received_bytes, key: DownloadEntryProgressBytesSoFar }
+        - { name: start_time, key: DownloadEntryDateAddedKey }
+        - { name: end_time, key: DownloadEntryDateFinishedKey }
+        - { name: state, derived: safari.download_state }
+        - { name: identifier, key: DownloadEntryIdentifier }
+        - { name: remove_when_done, key: DownloadEntryRemoveWhenDoneKey }
+        - { name: source_file, context: source_file }
+
+  # ============================================================
+  # Bookmarks and Reading List
+  # Binary plist with nested folder structure
+  # ============================================================
+  - id: bookmarks
+    name: Bookmarks
+    category: bookmarks
+    format: binary_plist
+    parser: safari.bookmarks
+    paths:
+      - pattern: "~/Library/Safari/Bookmarks.plist"
+        type: file
+    metadata:
+      contains_reading_list: "true"
+      structure: "nested_tree"
+
+  # ============================================================
+  # Top Sites
+  # Frequently visited sites for start page
+  # ============================================================
+  - id: top_sites
+    name: Top Sites
+    category: history
+    format: binary_plist
+    # Declared for catalog/forward documentation; not yet collected (F3).
+    planned: true
+    optional: true
+    paths:
+      - pattern: "~/Library/Safari/TopSites.plist"
+        type: file
+
+  # ============================================================
+  # Cookies
+  # Binary cookies file with session data
+  # Path changed with sandboxing in macOS 10.14
+  # ============================================================
+  - id: cookies
+    name: Cookies
+    category: cookies
+    format: binary_cookies
+    parser: safari.cookies
+    optional: true
+    paths:
+      # Sandboxed path (macOS 10.14+) — preferred when present.
+      - pattern: "~/Library/Containers/com.apple.Safari/Data/Library/Cookies/Cookies.binarycookies"
+        type: file
+        os_min: "10.14"
+      # Legacy path (pre-sandbox, still works in most cases).
+      - pattern: "~/Library/Cookies/Cookies.binarycookies"
+        type: file
+    metadata:
+      sensitive: "true"
+      redact_values: "true"
+
+  # ============================================================
+  # Extensions
+  # Safari extension configuration plist
+  # ============================================================
+  - id: extensions
+    name: Extensions
+    category: extensions
+    format: binary_plist
+    optional: true
+    paths:
+      - pattern: "~/Library/Safari/Extensions/Extensions.plist"
+        type: file
+    # Declarative extraction: one record per "Installed Extensions" element.
+    extract:
+      records: "Installed Extensions"
+      fields:
+        - { name: type, const: browser_extension }
+        - { name: browser, const: safari }
+        - { name: user, context: username }
+        - { name: bundle_id, key: "Bundle Directory Name" }
+        - { name: archive_file_name, key: "Archive File Name" }
+        - { name: enabled, key: "Enabled" }
+        - { name: source_file, context: source_file }
+    metadata:
+      legacy_format_max: "10.14"
+
+  # ============================================================
+  # Local Storage
+  # Per-origin SQLite databases
+  # Path changed in macOS Big Sur (11.0)
+  # ============================================================
+  - id: local_storage
+    name: Local Storage
+    category: storage
+    format: sqlite
+    optional: true
+    paths:
+      # Pre-Big Sur location
+      - pattern: "~/Library/Safari/LocalStorage/*.localstorage"
+        type: glob
+        os_max: "10.15"
+      # Big Sur and later
+      - pattern: "~/Library/WebKit/WebsiteData/LocalStorage/*.localstorage"
+        type: glob
+        os_min: "11.0"
+    # Declarative extraction from each .localstorage database's ItemTable. The
+    # collector enumerates the glob, derives `origin` from each filename, and
+    # passes it (plus username/source_file) as per-file context. The value BLOB
+    # feeds two fields: a truncated preview and its byte length.
+    extract:
+      from: ItemTable
+      fields:
+        - { name: type, const: local_storage }
+        - { name: browser, const: safari }
+        - { name: user, context: username }
+        - { name: origin, context: origin }
+        - { name: key, column: key }
+        - { name: value_preview, column: value, transform: "truncate:200" }
+        - { name: value_size, column: value, transform: byte_length }
+        - { name: source_file, context: source_file }
+
+  # ============================================================
+  # Last Session
+  # Open windows and tabs from last close
+  # ============================================================
+  - id: last_session
+    name: Last Session
+    category: session
+    format: binary_plist
+    parser: safari.lastsession
+    optional: true
+    paths:
+      - pattern: "~/Library/Safari/LastSession.plist"
+        type: file
+
+  # ============================================================
+  # Cloud Tabs (Safari 15+)
+  # Tabs synced via iCloud
+  # ============================================================
+  - id: cloud_tabs
+    name: Cloud Tabs
+    category: session
+    format: sqlite
+    # Declared for catalog/forward documentation; not yet collected (F3).
+    planned: true
+    optional: true
+    paths:
+      - pattern: "~/Library/Safari/CloudTabs.db"
+        type: file
+        os_min: "11.0"
+    related:
+      - "~/Library/Safari/CloudTabs.db-wal"
+      - "~/Library/Safari/CloudTabs.db-shm"
+
+  # ============================================================
+  # Tab Groups (Safari 15+)
+  # Named tab groups feature
+  # ============================================================
+  - id: tab_groups
+    name: Tab Groups
+    category: session
+    format: sqlite
+    # Declared for catalog/forward documentation; not yet collected (F3).
+    planned: true
+    optional: true
+    paths:
+      # Tab Groups is a Safari 15 feature, gated by app (Safari) version rather
+      # than macOS version — Safari 15 also shipped to Big Sur and Catalina.
+      - pattern: "~/Library/Safari/SafariTabs.db"
+        type: file
+        app_min: "15.0"
+    metadata:
+      feature_introduced: "Safari 15"
+
+  # ============================================================
+  # Recently Closed Tabs
+  # Quick reopen feature
+  # ============================================================
+  - id: recently_closed
+    name: Recently Closed Tabs
+    category: session
+    format: binary_plist
+    # Declared for catalog/forward documentation; not yet collected (F3).
+    planned: true
+    optional: true
+    paths:
+      - pattern: "~/Library/Safari/RecentlyClosedTabs.plist"
+        type: file
+        os_min: "10.13"
+
+  # ============================================================
+  # Favicon Cache
+  # Website icons (low forensic value but may contain URLs)
+  # ============================================================
+  - id: favicons
+    name: Favicon Cache
+    category: cache
+    format: sqlite
+    # Declared for catalog/forward documentation; not yet collected (F3).
+    planned: true
+    optional: true
+    paths:
+      - pattern: "~/Library/Safari/Favicon Cache/favicons.db"
+        type: file
+    metadata:
+      forensic_value: "low"
+      includes_urls: "true"

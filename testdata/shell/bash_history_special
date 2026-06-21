@@ -1,0 +1,10 @@
+echo "hello world"
+ls | grep foo | head -10
+cat file.txt >> output.log
+export PATH=$PATH:/usr/local/bin
+echo $HOME
+find . -name "*.go" -exec wc -l {} \;
+curl -X POST -H "Content-Type: application/json" -d '{"key":"value"}' https://api.example.com
+awk '{print $1}' file.txt | sort | uniq -c
+sed -i 's/old/new/g' file.txt
+for f in *.txt; do echo "$f"; done

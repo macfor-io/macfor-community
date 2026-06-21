@@ -1,0 +1,10 @@
+echo "quoted string with 'nested' quotes"
+ls | grep foo | head -10
+cat file.txt >> output.log 2>&1
+export PATH=$PATH:/usr/local/bin
+echo $HOME
+find . -name "*.go" -exec wc -l {} \;
+for i in 1 2 3; do echo $i; done
+[ -f file.txt ] && cat file.txt
+echo "path with backslash: C:\\Users"
+awk '{print $1}' file.txt | sort | uniq -c
