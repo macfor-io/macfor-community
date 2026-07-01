@@ -48,3 +48,9 @@ debug/
 
 # Build cache
 .cache/
+
+# Local project management (PRDs, specs, tickets, STATUS)
+.project/
+
+# Internal AI-assistant guidance (kept local, not published to the OSS repo)
+/CLAUDE.md
