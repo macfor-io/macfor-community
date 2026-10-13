@@ -1164,3 +1164,47 @@ func TestCollector_BothFormat(t *testing.T) {
 		t.Fatal("Parquet file is empty")
 	}
 }
+
+func TestCollectionStatistics(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.zip")
+	c, err := NewContainer(Config{OutputPath: path})
+	if err != nil {
+		t.Fatalf("NewContainer() error = %v", err)
+	}
+	c.SetCollectionMetadata(CollectionMeta{ToolVersion: "1.0.0", SourceType: "live"})
+	c.SetUsersProcessed(3)
+
+	coll := NewCollector(c, "shell.history")
+	for _, content := range []string{"12345", "1234567890"} {
+		artifact, _ := macfor.NewArtifact("shell.history", "shell", "history")
+		artifact.SourcePath = "/Users/alice/" + content
+		if err := coll.AddFile(context.Background(), *artifact, strings.NewReader(content)); err != nil {
+			t.Fatalf("AddFile() error = %v", err)
+		}
+	}
+	summary, err := coll.Finalize()
+	if err != nil {
+		t.Fatalf("Finalize() error = %v", err)
+	}
+	if summary.BytesCollected != 15 {
+		t.Errorf("BytesCollected = %d, want 15", summary.BytesCollected)
+	}
+	c.AddPluginSummary(summary)
+	if err := c.Finalize(); err != nil {
+		t.Fatalf("Finalize() error = %v", err)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	var m Manifest
+	if err := json.Unmarshal([]byte(readFromZip(t, path, "manifest.json")), &m); err != nil {
+		t.Fatalf("unmarshal manifest: %v", err)
+	}
+	if m.Statistics.TotalBytes != 15 {
+		t.Errorf("total_bytes = %d, want 15", m.Statistics.TotalBytes)
+	}
+	if m.Statistics.UsersProcessed != 3 {
+		t.Errorf("users_processed = %d, want 3", m.Statistics.UsersProcessed)
+	}
+}

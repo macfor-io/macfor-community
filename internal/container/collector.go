@@ -26,6 +26,9 @@ type Collector struct {
 	// filesCollected tracks the number of files added by this collector.
 	filesCollected int
 
+	// bytesCollected tracks the total size of files added by this collector.
+	bytesCollected int64
+
 	// recordsCreated tracks the number of records added by this collector.
 	recordsCreated int
 
@@ -86,7 +89,8 @@ func (c *Collector) AddFile(ctx context.Context, artifact macfor.Artifact, src i
 	containerPath := artifact.ContainerPath()
 
 	// Add the file to the container, preserving the source modified time.
-	if err := c.container.AddFileModified(containerPath, artifact.OriginalModTime, src); err != nil {
+	counter := &countingReader{r: src}
+	if err := c.container.AddFileModified(containerPath, artifact.OriginalModTime, counter); err != nil {
 		c.AddError(artifact, fmt.Errorf("adding file to container: %w", err))
 		return err
 	}
@@ -116,6 +120,7 @@ func (c *Collector) AddFile(ctx context.Context, artifact macfor.Artifact, src i
 
 	c.pluginMu.Lock()
 	c.filesCollected++
+	c.bytesCollected += counter.n
 	c.pluginMu.Unlock()
 
 	c.Log(macfor.LogDebug, "Added file: %s -> %s", artifact.SourcePath, containerPath)
@@ -279,6 +284,7 @@ func (c *Collector) Finalize() (PluginSummary, error) {
 		StartedAt:         c.startedAt,
 		CompletedAt:       completedAt,
 		FilesCollected:    c.filesCollected,
+		BytesCollected:    c.bytesCollected,
 		RecordsCreated:    c.recordsCreated,
 		ErrorsEncountered: len(c.errors),
 		Errors:            c.errors,
@@ -311,3 +317,15 @@ func (c *Collector) ErrorCount() int {
 
 // Ensure Collector implements macfor.Collector.
 var _ macfor.Collector = (*Collector)(nil)
+
+// countingReader counts the bytes read through it.
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (cr *countingReader) Read(p []byte) (int, error) {
+	n, err := cr.r.Read(p)
+	cr.n += int64(n)
+	return n, err
+}

@@ -419,6 +419,10 @@ func (o *Orchestrator) recordManifestProvenance(plugins []macfor.Plugin) {
 func (o *Orchestrator) runCollection(ctx context.Context, plugins []macfor.Plugin, detectionResults map[string]macfor.DetectionResult) map[string]container.PluginSummary {
 	results := make(map[string]container.PluginSummary)
 
+	if users, err := o.config.Source.Users(); err == nil {
+		o.config.Container.SetUsersProcessed(len(users))
+	}
+
 	o.reportProgress(Progress{
 		Phase:        PhaseCollection,
 		PluginsTotal: len(plugins),

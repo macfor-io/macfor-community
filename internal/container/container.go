@@ -84,6 +84,9 @@ type Container struct {
 
 	// collectionStartedAt is when the collection began.
 	collectionStartedAt time.Time
+
+	// usersProcessed is the number of user accounts collection covered.
+	usersProcessed int
 }
 
 // NewContainer creates a new evidence container using the provided configuration.
@@ -302,6 +305,14 @@ func (c *Container) addCustodyEntryLocked(entry ChainOfCustodyEntry) {
 	c.custodyLog.Entries = append(c.custodyLog.Entries, entry)
 }
 
+// SetUsersProcessed records the number of user accounts the collection
+// covered, reported as users_processed in the manifest statistics.
+func (c *Container) SetUsersProcessed(n int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.usersProcessed = n
+}
+
 // AddPluginSummary adds a plugin execution summary to the manifest.
 // This should be called after each plugin completes collection.
 func (c *Container) AddPluginSummary(summary PluginSummary) {
@@ -327,6 +338,7 @@ func (c *Container) AddPluginSummary(summary PluginSummary) {
 	c.manifest.Statistics.TotalFiles += summary.FilesCollected
 	c.manifest.Statistics.TotalRecords += summary.RecordsCreated
 	c.manifest.Statistics.TotalErrors += summary.ErrorsEncountered
+	c.manifest.Statistics.TotalBytes += summary.BytesCollected
 }
 
 // Finalize writes the manifest, chain of custody log, and hash manifest to the container.
@@ -358,6 +370,7 @@ func (c *Container) Finalize() error {
 		}
 	}
 	c.manifest.CompletedAt = now
+	c.manifest.Statistics.UsersProcessed = c.usersProcessed
 
 	// Ensure custody log exists
 	if c.custodyLog == nil {
