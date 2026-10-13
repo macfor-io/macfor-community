@@ -72,12 +72,7 @@ Examples:
 	cmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose logging")
 	cmd.PersistentFlags().BoolVarP(&quiet, "quiet", "q", false, "Suppress non-error output")
 
-	// Version flag handled by Cobra.
-	cmd.Version = Version
-
-	// Custom version template to include commit and build time.
-	cmd.SetVersionTemplate(`macfor {{.Version}} (commit: ` + Commit + `, built: ` + BuildTime + `)
-`)
+	setVersion(cmd)
 
 	// Add subcommands.
 	cmd.AddCommand(newListCmd())
@@ -91,11 +86,21 @@ Examples:
 // Fatal errors are printed to stderr; a partial collection has already
 // reported its errors, so it is not printed again.
 func Execute() error {
+	// The root command is built in init, before main sets the build
+	// information, so apply it again here.
+	setVersion(rootCmd)
 	err := rootCmd.Execute()
 	if err != nil && !errors.Is(err, ErrPartialCollection) {
 		_, _ = fmt.Fprintf(rootCmd.ErrOrStderr(), "Error: %v\n", err)
 	}
 	return err
+}
+
+// setVersion configures the --version output from the build information.
+func setVersion(cmd *cobra.Command) {
+	cmd.Version = Version
+	cmd.SetVersionTemplate(`macfor {{.Version}} (commit: ` + Commit + `, built: ` + BuildTime + `)
+`)
 }
 
 // Logger returns the configured global logger.
