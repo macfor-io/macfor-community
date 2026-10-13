@@ -107,7 +107,13 @@ Examples:
 
   # Collect from a mounted disk image or snapshot directory
   macfor collect --from /Volumes/Macintosh\ HD --output ./evidence.zip
-  macfor collect --from /tmp/macos-snapshot --dry-run`,
+  macfor collect --from /tmp/macos-snapshot --dry-run
+
+Exit codes:
+  0  Collection completed without errors
+  1  Collection failed
+  2  Collection completed with recovered errors (partial); the evidence
+     container was written and the errors are recorded in it`,
 		RunE: runCollect,
 	}
 
@@ -334,13 +340,26 @@ func logPluginSummaries(result *orchestrator.Result) {
 	}
 }
 
-// outputCollectionResults outputs the collection results.
+// outputCollectionResults outputs the collection results. It returns
+// ErrPartialCollection when collection recovered from errors.
 func outputCollectionResults(cmd *cobra.Command, result *orchestrator.Result, outputPath string) error {
 	collectResult := convertOrchestratorResult(result, outputPath)
 	if collectJSON {
-		return outputCollectResultJSON(cmd, collectResult)
+		if err := outputCollectResultJSON(cmd, collectResult); err != nil {
+			return err
+		}
+	} else {
+		outputCollectResultTable(cmd, collectResult)
 	}
-	outputCollectResultTable(cmd, collectResult)
+
+	if collectResult.TotalErrors > 0 {
+		if !collectJSON && !quiet {
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(),
+				"\nCompleted with %d recovered error(s) (exit code %d). See manifest.json and logs/ in the evidence container.\n",
+				collectResult.TotalErrors, ExitPartial)
+		}
+		return ErrPartialCollection
+	}
 	return nil
 }
 

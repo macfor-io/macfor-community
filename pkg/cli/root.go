@@ -2,6 +2,8 @@
 package cli
 
 import (
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"time"
@@ -86,8 +88,14 @@ Examples:
 }
 
 // Execute runs the root command and returns an error if one occurred.
+// Fatal errors are printed to stderr; a partial collection has already
+// reported its errors, so it is not printed again.
 func Execute() error {
-	return rootCmd.Execute()
+	err := rootCmd.Execute()
+	if err != nil && !errors.Is(err, ErrPartialCollection) {
+		_, _ = fmt.Fprintf(rootCmd.ErrOrStderr(), "Error: %v\n", err)
+	}
+	return err
 }
 
 // Logger returns the configured global logger.

@@ -76,6 +76,14 @@ sudo ./macfor collect --output ./evidence.zip
 ./macfor list plugins
 ```
 
+### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Collection completed without errors. |
+| `1` | Collection failed. |
+| `2` | Partial collection: the evidence container was written, but macfor recovered from one or more artifact errors (for example, permission denied without Full Disk Access). The errors are recorded in `manifest.json`, `chain-of-custody.json`, and `logs/`. |
+
 ## Plugins
 
 | Plugin | Description | Artifacts |
