@@ -121,13 +121,25 @@ func NewContainer(cfg Config) (*Container, error) {
 	}, nil
 }
 
-// AddFile adds a file to the container with the specified path.
+// AddFile adds a file generated during collection (manifest, records, logs)
+// to the container. The entry's modified time is the time it is written.
+func (c *Container) AddFile(path string, r io.Reader) error {
+	return c.AddFileModified(path, time.Now(), r)
+}
+
+// AddFileModified adds a file to the container with the specified path,
+// stamping the ZIP entry with the given modified time. For collected
+// evidence this is the source file's modification time, so extracted files
+// carry their original mtime. A zero time leaves the entry undated.
+//
+// ZIP headers store the modified time to whole-second precision; callers
+// needing the exact value must record it separately.
 // The content is read from the provided reader, and a SHA-256 hash
 // is computed during the write operation using io.TeeReader.
 //
 // Files are stored without compression (Store method) to preserve
 // forensic integrity and allow direct hash verification.
-func (c *Container) AddFile(path string, r io.Reader) error {
+func (c *Container) AddFileModified(path string, modified time.Time, r io.Reader) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -137,8 +149,9 @@ func (c *Container) AddFile(path string, r io.Reader) error {
 
 	// Create file header with Store method (no compression)
 	header := &zip.FileHeader{
-		Name:   path,
-		Method: zip.Store,
+		Name:     path,
+		Method:   zip.Store,
+		Modified: modified,
 	}
 
 	w, err := c.zipWriter.CreateHeader(header)

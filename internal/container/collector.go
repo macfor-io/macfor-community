@@ -80,8 +80,8 @@ func (c *Collector) AddFile(ctx context.Context, artifact macfor.Artifact, src i
 	// Compute the container path
 	containerPath := artifact.ContainerPath()
 
-	// Add the file to the container
-	if err := c.container.AddFile(containerPath, src); err != nil {
+	// Add the file to the container, preserving the source modified time.
+	if err := c.container.AddFileModified(containerPath, artifact.OriginalModTime, src); err != nil {
 		c.AddError(artifact, fmt.Errorf("adding file to container: %w", err))
 		return err
 	}
@@ -90,18 +90,23 @@ func (c *Collector) AddFile(ctx context.Context, artifact macfor.Artifact, src i
 	hashes := c.container.Hashes()
 	hash := hashes[containerPath]
 
-	// Log chain of custody entry
+	// Log chain of custody entry. The ZIP header only holds whole seconds,
+	// so the exact source modified time is recorded here.
+	details := map[string]any{
+		"plugin":      c.pluginID,
+		"source_path": artifact.SourcePath,
+		"username":    artifact.Username,
+	}
+	if !artifact.OriginalModTime.IsZero() {
+		details["source_modified"] = artifact.OriginalModTime.Format(time.RFC3339Nano)
+	}
 	c.container.AddCustodyEntry(ChainOfCustodyEntry{
 		Timestamp: time.Now(),
 		Action:    CustodyActionFileAdded,
 		Actor:     actorMacfor,
 		Target:    containerPath,
 		Hash:      hash,
-		Details: map[string]any{
-			"plugin":      c.pluginID,
-			"source_path": artifact.SourcePath,
-			"username":    artifact.Username,
-		},
+		Details:   details,
 	})
 
 	c.pluginMu.Lock()

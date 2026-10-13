@@ -96,6 +96,73 @@ func TestCollector_AddFile(t *testing.T) {
 		}
 	})
 
+	t.Run("preserves source modified time", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		path := filepath.Join(tmpDir, "test.zip")
+
+		c, err := NewContainer(Config{OutputPath: path})
+		if err != nil {
+			t.Fatalf("NewContainer() error = %v", err)
+		}
+		c.SetCollectionMetadata(CollectionMeta{ToolVersion: "1.0.0", SourceType: "live"})
+		coll := NewCollector(c, "shell.history")
+
+		mtime := time.Date(2025, 3, 14, 9, 26, 53, 589793238, time.UTC)
+		artifact, _ := macfor.NewArtifact("shell.history", "shell", "history")
+		artifact.SourcePath = testZshHistoryPath
+		artifact.Username = testUsernameAdmin
+		artifact.WithOriginalFile(mtime, 11)
+
+		if err := coll.AddFile(context.Background(), *artifact, strings.NewReader("echo hello\n")); err != nil {
+			t.Fatalf("AddFile() error = %v", err)
+		}
+		if _, err := coll.Finalize(); err != nil {
+			t.Fatalf("Finalize() error = %v", err)
+		}
+		if err := c.Finalize(); err != nil {
+			t.Fatalf("Finalize() error = %v", err)
+		}
+		if err := c.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+
+		zr, err := zip.OpenReader(path)
+		if err != nil {
+			t.Fatalf("OpenReader() error = %v", err)
+		}
+		defer func() { _ = zr.Close() }()
+
+		var found bool
+		for _, f := range zr.File {
+			if f.Name == artifact.ContainerPath() {
+				found = true
+				// ZIP headers hold whole seconds.
+				if want := mtime.Truncate(time.Second); !f.Modified.Equal(want) {
+					t.Errorf("entry Modified = %v, want %v", f.Modified, want)
+				}
+			} else if f.Modified.Year() < 2000 {
+				t.Errorf("generated entry %q is undated: %v", f.Name, f.Modified)
+			}
+		}
+		if !found {
+			t.Fatalf("entry %q not found", artifact.ContainerPath())
+		}
+
+		var custody ChainOfCustodyLog
+		if err := json.Unmarshal([]byte(readFromZip(t, path, "chain-of-custody.json")), &custody); err != nil {
+			t.Fatalf("unmarshal custody: %v", err)
+		}
+		var got any
+		for _, e := range custody.Entries {
+			if e.Action == CustodyActionFileAdded {
+				got = e.Details["source_modified"]
+			}
+		}
+		if want := "2025-03-14T09:26:53.589793238Z"; got != want {
+			t.Errorf("custody source_modified = %v, want %s", got, want)
+		}
+	})
+
 	t.Run("increments files collected count", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		path := filepath.Join(tmpDir, "test.zip")
