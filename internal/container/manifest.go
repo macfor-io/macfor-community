@@ -122,6 +122,10 @@ type CollectionEnvInfo struct {
 	User   string `json:"user"`
 	UID    int    `json:"uid"`
 	IsRoot bool   `json:"is_root"`
+
+	// FullDiskAccess records whether macfor had Full Disk Access on a live
+	// system. Without it, macOS denies reads of protected user data.
+	FullDiskAccess *bool `json:"full_disk_access,omitempty"`
 }
 
 // SourceInfoFromSystemInfo populates a SourceInfo from a SystemInfo struct.
@@ -178,9 +182,10 @@ func SourceInfoFromSystemInfo(si *macfor.SystemInfo) SourceInfo {
 			CollectionTime: si.CollectionTime,
 		},
 		CollectionEnv: &CollectionEnvInfo{
-			User:   si.CollectionUser,
-			UID:    si.CollectionUID,
-			IsRoot: si.IsRoot,
+			User:           si.CollectionUser,
+			UID:            si.CollectionUID,
+			IsRoot:         si.IsRoot,
+			FullDiskAccess: si.FullDiskAccess,
 		},
 	}
 
@@ -209,6 +214,9 @@ type PluginSummary struct {
 
 	// RecordsCreated is the number of parsed records created.
 	RecordsCreated int `json:"records_created"`
+
+	// BytesCollected is the total size of collected files in bytes.
+	BytesCollected int64 `json:"bytes_collected"`
 
 	// ErrorsEncountered is the number of errors during collection.
 	ErrorsEncountered int `json:"errors_encountered"`

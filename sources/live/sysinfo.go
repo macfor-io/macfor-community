@@ -45,6 +45,9 @@ func (s *Source) SystemInfo() (*macfor.SystemInfo, error) {
 		CollectionUID:  os.Getuid(),
 		IsRoot:         os.Getuid() == 0,
 	}
+	if granted, known := FullDiskAccess(); known {
+		info.FullDiskAccess = &granted
+	}
 
 	// Collect OS version information (MACFOR-SYS-2).
 	if err := s.collectOSVersion(info); err != nil {
@@ -68,7 +71,7 @@ func (s *Source) SystemInfo() (*macfor.SystemInfo, error) {
 	s.collectBootVolumeInfo(info)
 
 	// Collect temporal context (MACFOR-SYS-6).
-	info.Timezone = time.Local.String()
+	info.Timezone = systemTimezone()
 	_, offset := time.Now().Zone()
 	info.TimezoneOffset = formatTimezoneOffset(offset)
 

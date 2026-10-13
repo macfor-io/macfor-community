@@ -54,6 +54,25 @@ Requires Go 1.25+.
 
 [releases]: https://github.com/macfor-io/macfor-community/releases
 
+### Permissions: Full Disk Access and root
+
+macOS protects much of the data macfor collects, and two separate
+permissions apply when collecting from a live system:
+
+- **Full Disk Access.** Without it, macOS blocks reads of protected data,
+  such as Safari history, cookies and downloads, even when running as root.
+  Grant it in **System Settings → Privacy & Security → Full Disk Access** to
+  the app that runs macfor (Terminal, iTerm2, or your IDE), then restart that
+  app. macfor warns at startup when Full Disk Access is missing and records
+  `full_disk_access` in the manifest's `collection_env`.
+- **Root (`sudo`).** Needed to read other users' home directories. Without
+  it, macfor collects only what the current user can read.
+
+Anything macfor can't read is recorded as an error in the evidence
+container, and the run exits with code `2` (see [Exit codes](#exit-codes)).
+Full Disk Access is also recommended when collecting from a mounted image
+(`--from`), since macOS can restrict access to files on other volumes.
+
 ## Quick start
 
 ```bash

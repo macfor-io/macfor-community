@@ -161,6 +161,9 @@ func runCollect(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
+	if collectFrom == "" {
+		warnIfNoFullDiskAccess(cmd)
+	}
 
 	// Run detection first to check if we have applicable plugins.
 	detectionResult, err := runDetectionPhase(ctx, src)
@@ -175,6 +178,31 @@ func runCollect(cmd *cobra.Command, _ []string) error {
 
 	// Run collection phase.
 	return runCollectionPhase(ctx, cmd, src, detectionResult)
+}
+
+// fullDiskAccess reports whether the process has Full Disk Access. It is a
+// variable so tests can replace the probe.
+var fullDiskAccess = live.FullDiskAccess
+
+// warnIfNoFullDiskAccess warns on stderr when collecting from the live system
+// without Full Disk Access, since macOS will deny reads of protected
+// artifacts such as Safari data. Collection continues; the denials are
+// recorded as errors in the container. It is silent with --quiet or --json;
+// the manifest records full_disk_access either way.
+func warnIfNoFullDiskAccess(cmd *cobra.Command) {
+	if quiet || collectJSON {
+		return
+	}
+	if granted, known := fullDiskAccess(); !known || granted {
+		return
+	}
+	_, _ = fmt.Fprint(cmd.ErrOrStderr(), `Warning: macfor does not have Full Disk Access.
+  macOS will block access to protected artifacts (e.g. Safari history,
+  cookies and downloads), and those artifacts will be recorded as errors.
+  Grant access in System Settings > Privacy & Security > Full Disk Access
+  to the app running macfor (e.g. Terminal), then restart that app.
+
+`)
 }
 
 // createSource creates the appropriate Source based on the --from flag.

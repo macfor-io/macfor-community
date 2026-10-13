@@ -47,12 +47,13 @@ type SystemInfo struct {
 	CollectionTime time.Time `json:"collection_time"`           // When collection was performed.
 
 	// Collection Environment
-	CollectionUser string     `json:"collection_user"`        // User running macfor.
-	CollectionUID  int        `json:"collection_uid"`         // UID of collection user.
-	IsRoot         bool       `json:"is_root"`                // Whether running as root.
-	SourceType     SourceType `json:"source_type"`            // Source type (live or image).
-	ImagePath      string     `json:"image_path,omitempty"`   // Path to disk image (if applicable).
-	ImageFormat    string     `json:"image_format,omitempty"` // Image format (dmg, e01, raw).
+	CollectionUser string     `json:"collection_user"`            // User running macfor.
+	CollectionUID  int        `json:"collection_uid"`             // UID of collection user.
+	IsRoot         bool       `json:"is_root"`                    // Whether running as root.
+	FullDiskAccess *bool      `json:"full_disk_access,omitempty"` // Whether macfor had Full Disk Access (live only; nil if unknown).
+	SourceType     SourceType `json:"source_type"`                // Source type (live or image).
+	ImagePath      string     `json:"image_path,omitempty"`       // Path to disk image (if applicable).
+	ImageFormat    string     `json:"image_format,omitempty"`     // Image format (dmg, e01, raw).
 }
 
 // OSCodenames maps macOS version prefixes to marketing names.
