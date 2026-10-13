@@ -41,6 +41,8 @@ type UserOptions struct {
 	Name string
 	// Shell is the login shell path.
 	Shell string
+	// ZshHistory, if set, is written to the user's ~/.zsh_history.
+	ZshHistory string
 }
 
 // Defaults returns sensible default options for a Sonoma system with one user.
@@ -153,7 +155,14 @@ func writeSharedDir(root string) error {
 }
 
 func writeUserHomeDir(root string, user UserOptions) error {
-	return mkdirAll(filepath.Join(root, "Users", user.Username))
+	home := filepath.Join(root, "Users", user.Username)
+	if err := mkdirAll(home); err != nil {
+		return err
+	}
+	if user.ZshHistory == "" {
+		return nil
+	}
+	return os.WriteFile(filepath.Join(home, ".zsh_history"), []byte(user.ZshHistory), 0o600)
 }
 
 func writeDSLocalPlist(root string, user UserOptions) error {

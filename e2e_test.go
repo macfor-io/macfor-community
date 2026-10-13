@@ -16,7 +16,9 @@ import (
 	"github.com/macfor-io/macfor-community/internal/container"
 	"github.com/macfor-io/macfor-community/internal/orchestrator"
 	"github.com/macfor-io/macfor-community/pkg/macfor"
+	"github.com/macfor-io/macfor-community/sources/directory"
 	"github.com/macfor-io/macfor-community/sources/live"
+	"github.com/macfor-io/macfor-community/testdata/macostree"
 
 	// Import shell plugin to ensure it's registered.
 	_ "github.com/macfor-io/macfor-community/plugins/shell"
@@ -35,12 +37,9 @@ func TestE2E_FullCollectionWorkflow(t *testing.T) {
 	tmpDir := t.TempDir()
 	outputPath := filepath.Join(tmpDir, "e2e-evidence.zip")
 
-	// Phase 1: Create live source
-	t.Log("Phase 1: Creating live source")
-	src, err := live.New()
-	if err != nil {
-		t.Fatalf("failed to create live source: %v", err)
-	}
+	// Phase 1: Create source
+	t.Log("Phase 1: Creating source from a synthetic macOS tree")
+	src := fixtureSource(t)
 
 	// Verify source provides system information
 	osVersion, err := src.OSVersion()
@@ -95,6 +94,10 @@ func TestE2E_FullCollectionWorkflow(t *testing.T) {
 	t.Logf("  Duration: %s", result.Duration)
 	t.Logf("  Applicable plugins: %d", result.ApplicablePlugins())
 	t.Logf("  Collected plugins: %d", result.CollectedPlugins())
+
+	if result.CollectedPlugins() == 0 {
+		t.Fatal("expected shell.history to collect from the fixture tree")
+	}
 
 	// Phase 5: Close container
 	t.Log("Phase 5: Closing container")
@@ -260,25 +263,7 @@ func TestE2E_HashIntegrity(t *testing.T) {
 	tmpDir := t.TempDir()
 	outputPath := filepath.Join(tmpDir, "hash-integrity.zip")
 
-	src, err := live.New()
-	if err != nil {
-		t.Fatalf("failed to create live source: %v", err)
-	}
-
-	// Check if shell.history is applicable
-	shellPlugin, ok := macfor.ByID("shell.history")
-	if !ok {
-		t.Fatal("shell.history plugin not registered")
-	}
-
-	detectResult, err := shellPlugin.Detect(context.Background(), src)
-	if err != nil {
-		t.Fatalf("detection failed: %v", err)
-	}
-
-	if !detectResult.Applicable {
-		t.Skip("shell.history not applicable on this system")
-	}
+	src := fixtureSource(t)
 
 	cont, err := container.NewContainer(container.Config{OutputPath: outputPath})
 	if err != nil {
@@ -307,7 +292,7 @@ func TestE2E_HashIntegrity(t *testing.T) {
 	}
 
 	if result.TotalFiles == 0 {
-		t.Skip("no files collected - cannot verify hash integrity")
+		t.Fatal("expected files from the fixture tree")
 	}
 
 	// Verify hash integrity
@@ -322,10 +307,7 @@ func TestE2E_ChainOfCustody(t *testing.T) {
 	tmpDir := t.TempDir()
 	outputPath := filepath.Join(tmpDir, "custody.zip")
 
-	src, err := live.New()
-	if err != nil {
-		t.Fatalf("failed to create live source: %v", err)
-	}
+	src := fixtureSource(t)
 
 	cont, err := container.NewContainer(container.Config{OutputPath: outputPath})
 	if err != nil {
@@ -365,10 +347,7 @@ func TestE2E_ManifestContents(t *testing.T) {
 	tmpDir := t.TempDir()
 	outputPath := filepath.Join(tmpDir, "manifest.zip")
 
-	src, err := live.New()
-	if err != nil {
-		t.Fatalf("failed to create live source: %v", err)
-	}
+	src := fixtureSource(t)
 
 	cont, err := container.NewContainer(container.Config{OutputPath: outputPath})
 	if err != nil {
@@ -695,4 +674,18 @@ func readZipFile(f *zip.File) ([]byte, error) {
 func sha256Hash(data []byte) string {
 	hash := sha256.Sum256(data)
 	return hex.EncodeToString(hash[:])
+}
+
+// fixtureSource returns a directory source over a synthetic macOS tree whose
+// user has zsh history, so collection tests produce a full evidence
+// container on any machine, including CI runners without shell history.
+func fixtureSource(t *testing.T) macfor.Source {
+	t.Helper()
+	opts := macostree.Defaults()
+	opts.Users[0].ZshHistory = ": 1700000000:0;echo hello\n: 1700000001:0;ls -la\n: 1700000002:0;cd /tmp\n"
+	src, err := directory.New(macostree.MustBuild(t, opts))
+	if err != nil {
+		t.Fatalf("creating directory source: %v", err)
+	}
+	return src
 }

@@ -14,7 +14,9 @@ import (
 
 	"github.com/macfor-io/macfor-community/internal/container"
 	"github.com/macfor-io/macfor-community/pkg/macfor"
+	"github.com/macfor-io/macfor-community/sources/directory"
 	"github.com/macfor-io/macfor-community/sources/live"
+	"github.com/macfor-io/macfor-community/testdata/macostree"
 
 	// Import shell plugin to ensure it's registered.
 	_ "github.com/macfor-io/macfor-community/plugins/shell"
@@ -235,9 +237,13 @@ func TestIntegration_ContainerContents(t *testing.T) {
 		t.Skip("integration test only runs on macOS")
 	}
 
-	src, err := live.New()
+	// A synthetic tree with shell history makes collection deterministic,
+	// including on CI runners that have no shell history of their own.
+	opts := macostree.Defaults()
+	opts.Users[0].ZshHistory = ": 1700000000:0;echo hello\n: 1700000001:0;ls -la\n"
+	src, err := directory.New(macostree.MustBuild(t, opts))
 	if err != nil {
-		t.Fatalf("failed to create live source: %v", err)
+		t.Fatalf("failed to create directory source: %v", err)
 	}
 
 	tmpDir := t.TempDir()
