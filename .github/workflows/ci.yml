@@ -19,13 +19,16 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version-file: go.mod
           cache: true
 
-      - name: Install golangci-lint
-        uses: golangci/golangci-lint-action@v6
+      # golangci-lint v2 needs golangci-lint-action v7+, and a linter
+      # built with Go >= the module's go directive (1.25.6). Keep this in
+      # step with the version used locally.
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v8
         with:
-          version: v2.1.0
+          version: v2.14.0
           args: --timeout=5m
 
   test:
@@ -37,7 +40,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version-file: go.mod
           cache: true
 
       - name: Run tests
@@ -52,7 +55,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version-file: go.mod
           cache: true
 
       - name: Build macfor
@@ -71,7 +74,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version-file: go.mod
           cache: true
 
       - name: Build
