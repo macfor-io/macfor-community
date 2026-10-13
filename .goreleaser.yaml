@@ -27,6 +27,7 @@ builds:
 
 universal_binaries:
   - id: macfor-universal
+    ids: [macfor]
     replace: false
     name_template: macfor
 
