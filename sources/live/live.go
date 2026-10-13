@@ -8,6 +8,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/macfor-io/macfor-community/pkg/macfor"
 )
@@ -18,6 +19,11 @@ import (
 type Source struct {
 	// currentUser caches the current user for path resolution.
 	currentUser *user.User
+
+	// users caches the result of Users for the life of the Source.
+	users       []macfor.User
+	usersLoaded bool
+	usersMu     sync.Mutex
 }
 
 // New creates a new Source for accessing the live system.

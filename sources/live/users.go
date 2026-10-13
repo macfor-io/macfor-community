@@ -2,13 +2,14 @@ package live
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"fmt"
 	"os/exec"
 	"strconv"
 	"strings"
 	"time"
+
+	"howett.net/plist"
 
 	"github.com/macfor-io/macfor-community/pkg/macfor"
 )
@@ -74,7 +75,27 @@ type userPlist struct {
 // /var/db/dslocal/nodes/Default/users/. If this directory is not
 // accessible (e.g., running without elevated privileges), it falls
 // back to using dscl or parsing /etc/passwd.
+//
+// The first successful result is cached for the life of the Source, so
+// every plugin in a collection sees the same snapshot of user accounts.
+// Callers receive a copy and may modify it.
 func (s *Source) Users() ([]macfor.User, error) {
+	s.usersMu.Lock()
+	defer s.usersMu.Unlock()
+
+	if !s.usersLoaded {
+		users, err := s.lookupUsers()
+		if err != nil {
+			return nil, err
+		}
+		s.users = users
+		s.usersLoaded = true
+	}
+	return append([]macfor.User(nil), s.users...), nil
+}
+
+// lookupUsers enumerates human user accounts without caching.
+func (s *Source) lookupUsers() ([]macfor.User, error) {
 	// Try dslocal first (requires root)
 	users, err := s.usersFromDSLocal()
 	if err == nil && len(users) > 0 {
@@ -152,115 +173,66 @@ func (s *Source) parseUserPlist(path string) (macfor.User, error) {
 	return user, nil
 }
 
+// dsclUserAttrs are the user attributes read from Open Directory.
+var dsclUserAttrs = []string{
+	"RecordName", "UniqueID", "PrimaryGroupID", "RealName", "NFSHomeDirectory", "UserShell",
+}
+
 // usersFromDSCL uses the dscl command-line tool to enumerate users.
 // This works without root access on macOS and provides full user information
-// from Open Directory.
+// from Open Directory. A single "dscl -readall" call returns every user
+// record, avoiding a process per user and attribute.
 func (s *Source) usersFromDSCL() ([]macfor.User, error) {
-	// Get list of all users
 	ctx, cancel := context.WithTimeout(context.Background(), dsclTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "dscl", ".", "-list", "/Users")
-	output, err := cmd.Output()
+	args := append([]string{"-plist", ".", "-readall", "/Users"}, dsclUserAttrs...)
+	output, err := exec.CommandContext(ctx, "dscl", args...).Output()
 	if err != nil {
-		return nil, fmt.Errorf("running dscl list: %w", err)
+		return nil, fmt.Errorf("running dscl readall: %w", err)
+	}
+
+	return parseDSCLUsers(output)
+}
+
+// parseDSCLUsers parses "dscl -plist . -readall /Users" output into the
+// human user accounts it contains. Each record maps attribute names such as
+// "dsAttrTypeStandard:UniqueID" to arrays of values.
+func parseDSCLUsers(data []byte) ([]macfor.User, error) {
+	var records []map[string][]string
+	if _, err := plist.Unmarshal(data, &records); err != nil {
+		return nil, fmt.Errorf("parsing dscl output: %w", err)
 	}
 
 	var users []macfor.User
-	scanner := bufio.NewScanner(bytes.NewReader(output))
-
-	for scanner.Scan() {
-		username := strings.TrimSpace(scanner.Text())
-		if username == "" {
-			continue
+	for _, r := range records {
+		attr := func(name string) string {
+			// RecordName lists the short name first, then any aliases.
+			if v := r["dsAttrTypeStandard:"+name]; len(v) > 0 {
+				return strings.TrimSpace(v[0])
+			}
+			return ""
 		}
 
-		// Get detailed info for this user
-		user := s.getUserFromDSCL(username)
+		user := macfor.User{
+			Username: attr("RecordName"),
+			Name:     attr("RealName"),
+			HomeDir:  attr("NFSHomeDirectory"),
+			Shell:    attr("UserShell"),
+		}
+		if uid, err := strconv.Atoi(attr("UniqueID")); err == nil {
+			user.UID = uid
+		}
+		if gid, err := strconv.Atoi(attr("PrimaryGroupID")); err == nil {
+			user.GID = gid
+		}
 
-		if isHumanUser(user) {
+		if user.Username != "" && isHumanUser(user) {
 			users = append(users, user)
 		}
 	}
 
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("scanning dscl output: %w", err)
-	}
-
 	return users, nil
-}
-
-// getUserFromDSCL retrieves detailed user information using dscl.
-func (s *Source) getUserFromDSCL(username string) macfor.User {
-	userPath := "/Users/" + username
-
-	user := macfor.User{
-		Username: username,
-	}
-
-	// Get UID
-	if uid, err := s.dsclReadAttr(userPath, "UniqueID"); err == nil && uid != "" {
-		if uidInt, err := strconv.Atoi(uid); err == nil {
-			user.UID = uidInt
-		}
-	}
-
-	// Get GID
-	if gid, err := s.dsclReadAttr(userPath, "PrimaryGroupID"); err == nil && gid != "" {
-		if gidInt, err := strconv.Atoi(gid); err == nil {
-			user.GID = gidInt
-		}
-	}
-
-	// Get real name
-	if name, err := s.dsclReadAttr(userPath, "RealName"); err == nil {
-		user.Name = name
-	}
-
-	// Get home directory
-	if home, err := s.dsclReadAttr(userPath, "NFSHomeDirectory"); err == nil {
-		user.HomeDir = home
-	}
-
-	// Get shell
-	if shell, err := s.dsclReadAttr(userPath, "UserShell"); err == nil {
-		user.Shell = shell
-	}
-
-	return user
-}
-
-// dsclReadAttr reads a single attribute from dscl.
-func (s *Source) dsclReadAttr(path, attr string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), dsclTimeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "dscl", ".", "-read", path, attr)
-	output, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-
-	// Output format is "AttrName: value" or "AttrName:\n value" for multi-line
-	lines := strings.Split(string(output), "\n")
-	if len(lines) == 0 {
-		return "", fmt.Errorf("empty output")
-	}
-
-	// Check first line for "AttrName: value" format
-	firstLine := lines[0]
-	if idx := strings.Index(firstLine, ":"); idx >= 0 {
-		value := strings.TrimSpace(firstLine[idx+1:])
-		if value != "" {
-			return value, nil
-		}
-		// Value might be on the next line (multi-line format)
-		if len(lines) > 1 {
-			return strings.TrimSpace(lines[1]), nil
-		}
-	}
-
-	return "", fmt.Errorf("could not parse dscl output")
 }
 
 // usersFromPasswd parses /etc/passwd as a fallback.

@@ -498,3 +498,77 @@ func TestLiveSource_ParseUserPlist(t *testing.T) {
 		}
 	})
 }
+
+// dsclReadallFixture mirrors "dscl -plist . -readall /Users ..." output.
+const dsclReadallFixture = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<array>
+	<dict>
+		<key>dsAttrTypeStandard:NFSHomeDirectory</key><array><string>/var/empty</string></array>
+		<key>dsAttrTypeStandard:PrimaryGroupID</key><array><string>-2</string></array>
+		<key>dsAttrTypeStandard:RecordName</key><array><string>_spotlight</string></array>
+		<key>dsAttrTypeStandard:UniqueID</key><array><string>89</string></array>
+		<key>dsAttrTypeStandard:UserShell</key><array><string>/usr/bin/false</string></array>
+	</dict>
+	<dict>
+		<key>dsAttrTypeStandard:NFSHomeDirectory</key><array><string>/Users/alice</string></array>
+		<key>dsAttrTypeStandard:PrimaryGroupID</key><array><string>20</string></array>
+		<key>dsAttrTypeStandard:RealName</key><array><string>Alice Example </string></array>
+		<key>dsAttrTypeStandard:RecordName</key><array><string>alice</string><string>com.apple.idms.appleid.prd.0001</string></array>
+		<key>dsAttrTypeStandard:UniqueID</key><array><string>501</string></array>
+		<key>dsAttrTypeStandard:UserShell</key><array><string>/bin/zsh</string></array>
+	</dict>
+	<dict>
+		<key>dsAttrTypeStandard:NFSHomeDirectory</key><array><string>/Users/bob</string></array>
+		<key>dsAttrTypeStandard:RecordName</key><array><string>bob</string></array>
+		<key>dsAttrTypeStandard:UniqueID</key><array><string>502</string></array>
+	</dict>
+	<dict>
+		<key>dsAttrTypeStandard:RecordName</key><array><string>nobody</string></array>
+		<key>dsAttrTypeStandard:UniqueID</key><array><string>-2</string></array>
+	</dict>
+</array>
+</plist>`
+
+func TestParseDSCLUsers(t *testing.T) {
+	users, err := parseDSCLUsers([]byte(dsclReadallFixture))
+	if err != nil {
+		t.Fatalf("parseDSCLUsers() error = %v", err)
+	}
+
+	want := []macfor.User{
+		{Username: "alice", UID: 501, GID: 20, Name: "Alice Example", HomeDir: "/Users/alice", Shell: "/bin/zsh"},
+		{Username: "bob", UID: 502, HomeDir: "/Users/bob"},
+	}
+	if len(users) != len(want) {
+		t.Fatalf("got %d users %+v, want %d", len(users), users, len(want))
+	}
+	for i := range want {
+		if users[i] != want[i] {
+			t.Errorf("users[%d] = %+v, want %+v", i, users[i], want[i])
+		}
+	}
+
+	if _, err := parseDSCLUsers([]byte("not a plist")); err == nil {
+		t.Error("parseDSCLUsers(invalid) error = nil, want error")
+	}
+}
+
+func TestLiveSource_UsersCached(t *testing.T) {
+	src := &Source{users: []macfor.User{{Username: "alice", UID: 501}}, usersLoaded: true}
+
+	first, err := src.Users()
+	if err != nil {
+		t.Fatalf("Users() error = %v", err)
+	}
+	first[0].Username = "modified"
+
+	second, err := src.Users()
+	if err != nil {
+		t.Fatalf("Users() error = %v", err)
+	}
+	if len(second) != 1 || second[0].Username != "alice" {
+		t.Errorf("second Users() = %+v, want cached alice unaffected by caller changes", second)
+	}
+}
