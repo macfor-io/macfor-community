@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"path/filepath"
 	"strings"
@@ -414,6 +415,72 @@ func TestCollector_AddRecord(t *testing.T) {
 		err = coll.AddRecord(ctx, *artifact, map[string]string{"test": "value"})
 		if !errors.Is(err, context.Canceled) {
 			t.Errorf("AddRecord() error = %v, want context.Canceled", err)
+		}
+	})
+}
+
+func TestCollector_RecordCollectError(t *testing.T) {
+	newColl := func(t *testing.T) *Collector {
+		t.Helper()
+		c, err := NewContainer(Config{OutputPath: filepath.Join(t.TempDir(), "test.zip")})
+		if err != nil {
+			t.Fatalf("NewContainer() error = %v", err)
+		}
+		t.Cleanup(func() { _ = c.Close() })
+		return NewCollector(c, "browser.safari")
+	}
+
+	t.Run("counts each joined error", func(t *testing.T) {
+		coll := newColl(t)
+		history := fmt.Errorf("history for alice: %w", errors.New("permission denied"))
+		cookies := fmt.Errorf("cookies for alice: %w", errors.New("permission denied"))
+		nested := errors.Join(errors.New("bookmarks for bob: denied"), errors.New("session for bob: denied"))
+
+		coll.RecordCollectError(errors.Join(history, cookies, nested))
+
+		summary, err := coll.Finalize()
+		if err != nil {
+			t.Fatalf("Finalize() error = %v", err)
+		}
+		if summary.ErrorsEncountered != 4 {
+			t.Errorf("ErrorsEncountered = %d, want 4", summary.ErrorsEncountered)
+		}
+		if summary.Errors[0].Message != history.Error() {
+			t.Errorf("Errors[0].Message = %q, want %q", summary.Errors[0].Message, history.Error())
+		}
+	})
+
+	t.Run("skips errors already added", func(t *testing.T) {
+		coll := newColl(t)
+		artifact, _ := macfor.NewArtifact("browser.safari", "browser", "history")
+		base := errors.New("disk I/O error")
+		coll.AddError(*artifact, base)
+
+		coll.RecordCollectError(errors.Join(
+			fmt.Errorf("history for alice: %w", base),
+			errors.New("cookies for alice: permission denied"),
+		))
+
+		summary, err := coll.Finalize()
+		if err != nil {
+			t.Fatalf("Finalize() error = %v", err)
+		}
+		if summary.ErrorsEncountered != 2 {
+			t.Errorf("ErrorsEncountered = %d, want 2", summary.ErrorsEncountered)
+		}
+	})
+
+	t.Run("records a plain error", func(t *testing.T) {
+		coll := newColl(t)
+		coll.RecordCollectError(errors.New("no users"))
+		coll.RecordCollectError(nil)
+
+		summary, err := coll.Finalize()
+		if err != nil {
+			t.Fatalf("Finalize() error = %v", err)
+		}
+		if summary.ErrorsEncountered != 1 {
+			t.Errorf("ErrorsEncountered = %d, want 1", summary.ErrorsEncountered)
 		}
 	})
 }

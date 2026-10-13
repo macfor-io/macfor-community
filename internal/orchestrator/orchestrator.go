@@ -458,8 +458,11 @@ func (o *Orchestrator) runCollection(ctx context.Context, plugins []macfor.Plugi
 			},
 		})
 
-		// Run collection.
-		collectErr := p.Collect(ctx, o.config.Source, coll)
+		// Run collection. Errors the plugin returns are recorded before
+		// finalizing so they are counted in the summary and manifest.
+		if err := p.Collect(ctx, o.config.Source, coll); err != nil {
+			coll.RecordCollectError(err)
+		}
 
 		// Finalize collector and get summary.
 		summary, _ := coll.Finalize()
@@ -473,12 +476,6 @@ func (o *Orchestrator) runCollection(ctx context.Context, plugins []macfor.Plugi
 			}
 			// Detection metadata could be stored if needed.
 			_ = detection
-		}
-
-		if collectErr != nil {
-			// Non-fatal collection errors are already recorded in the collector.
-			// Only log if it's a different kind of error.
-			_ = collectErr
 		}
 
 		// Add plugin completed custody entry.

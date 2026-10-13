@@ -25,6 +25,9 @@ const (
 	// actorMacfor is the actor recorded in chain-of-custody entries.
 	actorMacfor = "macfor"
 
+	// custodyKeyPlugin is the chain-of-custody detail key for the plugin ID.
+	custodyKeyPlugin = "plugin"
+
 	// containerFormatVersion is the evidence-container format version.
 	containerFormatVersion = "1.2"
 )

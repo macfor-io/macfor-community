@@ -5,6 +5,7 @@ package container
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -30,6 +31,10 @@ type Collector struct {
 
 	// errors tracks non-fatal errors that occurred during collection.
 	errors []PluginError
+
+	// added holds the errors passed to AddError, so errors a plugin also
+	// returns from Collect are not counted twice.
+	added []error
 
 	// recordWriter handles serialisation of structured records.
 	recordWriter RecordWriter
@@ -93,9 +98,9 @@ func (c *Collector) AddFile(ctx context.Context, artifact macfor.Artifact, src i
 	// Log chain of custody entry. The ZIP header only holds whole seconds,
 	// so the exact source modified time is recorded here.
 	details := map[string]any{
-		"plugin":      c.pluginID,
-		"source_path": artifact.SourcePath,
-		"username":    artifact.Username,
+		custodyKeyPlugin: c.pluginID,
+		"source_path":    artifact.SourcePath,
+		"username":       artifact.Username,
 	}
 	if !artifact.OriginalModTime.IsZero() {
 		details["source_modified"] = artifact.OriginalModTime.Format(time.RFC3339Nano)
@@ -155,6 +160,7 @@ func (c *Collector) AddError(artifact macfor.Artifact, err error) {
 
 	c.pluginMu.Lock()
 	c.errors = append(c.errors, pluginErr)
+	c.added = append(c.added, err)
 	c.pluginMu.Unlock()
 
 	// Log to collection log
@@ -167,11 +173,67 @@ func (c *Collector) AddError(artifact macfor.Artifact, err error) {
 		Actor:     actorMacfor,
 		Target:    artifact.SourcePath,
 		Details: map[string]any{
-			"plugin":    c.pluginID,
-			"operation": artifact.Type,
-			"error":     err.Error(),
+			custodyKeyPlugin: c.pluginID,
+			"operation":      artifact.Type,
+			"error":          err.Error(),
 		},
 	})
+}
+
+// RecordCollectError records the error a plugin returned from Collect.
+// Plugins commonly report per-artifact failures by joining them into the
+// returned error instead of calling AddError, so each joined error is
+// recorded separately. Errors already recorded via AddError are skipped.
+// The plugin is expected to have logged them, so they are not logged again.
+func (c *Collector) RecordCollectError(err error) {
+	for _, e := range splitJoined(err) {
+		c.pluginMu.Lock()
+		dup := false
+		for _, a := range c.added {
+			if errors.Is(e, a) {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			c.errors = append(c.errors, PluginError{
+				Operation: "collect",
+				Message:   e.Error(),
+				Timestamp: time.Now(),
+			})
+		}
+		c.pluginMu.Unlock()
+
+		if dup {
+			continue
+		}
+		c.container.AddCustodyEntry(ChainOfCustodyEntry{
+			Timestamp: time.Now(),
+			Action:    CustodyActionError,
+			Actor:     actorMacfor,
+			Target:    c.pluginID,
+			Details: map[string]any{
+				custodyKeyPlugin: c.pluginID,
+				"operation":      "collect",
+				"error":          e.Error(),
+			},
+		})
+	}
+}
+
+// splitJoined flattens errors created by errors.Join into their components.
+func splitJoined(err error) []error {
+	if err == nil {
+		return nil
+	}
+	if j, ok := err.(interface{ Unwrap() []error }); ok {
+		var out []error
+		for _, e := range j.Unwrap() {
+			out = append(out, splitJoined(e)...)
+		}
+		return out
+	}
+	return []error{err}
 }
 
 // Log writes a message to the collection log.
