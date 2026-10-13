@@ -7,6 +7,8 @@ into a structured, hash-verified evidence container. It's designed for
 investigators, incident responders, and security researchers who need
 reproducible, tool-verified collections.
 
+Learn more at **[macfor.io](https://macfor.io)**.
+
 [![CI](https://github.com/macfor-io/macfor-community/actions/workflows/ci.yml/badge.svg)](https://github.com/macfor-io/macfor-community/actions/workflows/ci.yml)
 [![Go Report Card](https://goreportcard.com/badge/github.com/macfor-io/macfor-community)](https://goreportcard.com/report/github.com/macfor-io/macfor-community)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -110,8 +112,12 @@ sudo ./macfor collect --output ./evidence.zip
 | `shell.history` | Shell command history | bash, zsh, fish, sh |
 | `browser.safari` | Safari browser state | History, Downloads, Bookmarks, Cookies, Local Storage, Extensions, Session state |
 
-More artifact types are actively being developed — see the
-[feature request issues][features] if there's something you'd like covered.
+> **Need more coverage?** [macfor Pro](https://macfor.io/pricing) adds 30+
+> collectors on the same framework, including Chrome, Firefox, Messages,
+> Mail, FSEvents, Unified Logs and keychain metadata.
+
+Missing an artifact you'd like in the community edition? Open a
+[feature request][features].
 
 [features]: https://github.com/macfor-io/macfor-community/issues?q=is%3Aissue+label%3Aenhancement
 
