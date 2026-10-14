@@ -18,3 +18,14 @@ func TestAttachCancelled(t *testing.T) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
 }
+
+// TestAttachEWFCancelled exercises the production E01 entry point without
+// running ewfmount: a done context stops before any lookup or command.
+func TestAttachEWFCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := attachImage(ctx, "/nonexistent.E01", FormatE01); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+}

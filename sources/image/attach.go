@@ -159,6 +159,10 @@ type attachment struct {
 	// volume group, or empty for a single-volume image.
 	data string
 
+	// ewf is the ewfmount that exposed the attached raw device for an E01
+	// image, released after the hdiutil detach; nil for DMG and raw images.
+	ewf *ewfMount
+
 	mu       sync.Mutex
 	detached bool
 }
@@ -236,26 +240,31 @@ func (a *attachment) roots() []string {
 }
 
 // detach detaches the image, retrying once with -force when the plain detach
-// fails (typically because a volume is busy). Calling detach again after it has
-// succeeded is a no-op.
+// fails (typically because a volume is busy). For an E01 image it then releases
+// the owning ewf mount (umount, then removal of the mount dir), so teardown runs
+// in strict reverse order of setup; the ewf mount is left alone while the
+// hdiutil detach is failing. Calling detach again after it has succeeded is a
+// no-op, and a failed detach can be retried.
 func (a *attachment) detach(ctx context.Context) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if a.detached {
-		return nil
-	}
-	if a.devNode == "" {
-		return errors.New("detach image: no device node recorded")
-	}
-
-	if _, err := a.runner.Run(ctx, hdiutilPath, "detach", a.devNode); err != nil {
-		if _, forceErr := a.runner.Run(ctx, hdiutilPath, "detach", "-force", a.devNode); forceErr != nil {
-			return fmt.Errorf("detach %s: %w (forced retry: %w)", a.devNode, err, forceErr)
+	if !a.detached {
+		if a.devNode == "" {
+			return errors.New("detach image: no device node recorded")
 		}
+
+		if _, err := a.runner.Run(ctx, hdiutilPath, "detach", a.devNode); err != nil {
+			if _, forceErr := a.runner.Run(ctx, hdiutilPath, "detach", "-force", a.devNode); forceErr != nil {
+				return fmt.Errorf("detach %s: %w (forced retry: %w)", a.devNode, err, forceErr)
+			}
+		}
+		a.detached = true
 	}
 
-	a.detached = true
+	if a.ewf != nil {
+		return a.ewf.unmount(ctx)
+	}
 	return nil
 }
 
