@@ -28,6 +28,20 @@ type Manifest struct {
 	// Chromium, or Firefox / Developer Edition / Nightly) with their data
 	// directory and application-bundle locations. Resolve via collect.Variants.
 	Variants []VariantSpec `yaml:"variants,omitempty"`
+
+	// source holds the exact bytes the manifest was parsed from (nil for a
+	// manifest built in code). Unexported, so it never round-trips through YAML.
+	source []byte
+}
+
+// Source returns the exact bytes the manifest was parsed from — for an
+// embedded manifest, the plugin's artifacts.yaml as built into the binary. It
+// returns nil for a manifest that wasn't created by Parse or
+// ParseWithoutValidation. Manifest provenance hashes these bytes, so a recorded
+// hash can be checked with `shasum -a 256 artifacts.yaml`. Callers must not
+// modify the returned slice.
+func (m *Manifest) Source() []byte {
+	return m.source
 }
 
 // VariantSpec describes one application variant's data directory and bundle

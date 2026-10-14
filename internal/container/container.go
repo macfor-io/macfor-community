@@ -30,7 +30,7 @@ const (
 	custodyKeyPlugin = "plugin"
 
 	// containerFormatVersion is the evidence-container format version.
-	containerFormatVersion = "1.2"
+	containerFormatVersion = "1.3"
 )
 
 // Config holds configuration for creating an evidence container.

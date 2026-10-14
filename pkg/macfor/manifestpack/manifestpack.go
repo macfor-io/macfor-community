@@ -205,10 +205,11 @@ func Load(fsys fs.FS, root string) (*Pack, error) {
 //
 // Unlike Load, FromManifests does NOT enforce pack constraints: embedded
 // manifests are trusted and legitimately use native parsers, derive functions,
-// and raw SQL. Each entry's content hash is the SHA-256 of a canonical YAML
-// re-serialization of the parsed manifest — reproducible from the binary (not
-// byte-identical to the original source file). version binds the digest to the
-// tool/build version.
+// and raw SQL. Each entry's content hash is the SHA-256 of the exact bytes the
+// manifest was parsed from (artifacts.Manifest.Source) — for an embedded
+// manifest, the plugin's artifacts.yaml — the same hash Load checks for a pack
+// file, so anyone holding the source can reproduce it. version binds the digest
+// to the tool/build version.
 func FromManifests(version string, manifests map[string]*artifacts.Manifest) (*Pack, error) {
 	pack := &Pack{
 		Version:   version,
@@ -227,9 +228,9 @@ func FromManifests(version string, manifests map[string]*artifacts.Manifest) (*P
 		if m == nil {
 			return nil, fmt.Errorf("manifestpack: nil manifest for %q", id)
 		}
-		data, err := yaml.Marshal(m)
-		if err != nil {
-			return nil, fmt.Errorf("manifestpack: serializing manifest for %q: %w", id, err)
+		data := m.Source()
+		if data == nil {
+			return nil, fmt.Errorf("manifestpack: manifest for %q has no source bytes (not created by artifacts.Parse)", id)
 		}
 		pack.Entries = append(pack.Entries, Entry{
 			PluginID: id,

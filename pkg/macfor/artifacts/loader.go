@@ -1,6 +1,7 @@
 package artifacts
 
 import (
+	"bytes"
 	"fmt"
 
 	"gopkg.in/yaml.v3"
@@ -20,6 +21,7 @@ func Parse(data []byte) (*Manifest, error) {
 
 	// Apply defaults.
 	applyDefaults(&manifest)
+	manifest.source = bytes.Clone(data)
 
 	return &manifest, nil
 }
@@ -54,6 +56,7 @@ func ParseWithoutValidation(data []byte) (*Manifest, error) {
 	}
 
 	applyDefaults(&manifest)
+	manifest.source = bytes.Clone(data)
 
 	return &manifest, nil
 }

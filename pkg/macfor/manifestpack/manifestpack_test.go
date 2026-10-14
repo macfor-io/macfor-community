@@ -483,3 +483,39 @@ func TestFromManifests(t *testing.T) {
 		t.Errorf("unexpected provenance: %+v", prov)
 	}
 }
+
+// TestFromManifestsHashesSourceBytes pins the provenance hash to the exact
+// manifest file bytes, so it can be checked with `shasum -a 256 artifacts.yaml`
+// and matches the hash a pack declares for the same file.
+func TestFromManifestsHashesSourceBytes(t *testing.T) {
+	src := []byte(cleanManifest)
+	m, err := artifacts.Parse(src)
+	if err != nil {
+		t.Fatalf("parse cleanManifest: %v", err)
+	}
+
+	p, err := FromManifests("tool-1.2.3", map[string]*artifacts.Manifest{"browser.safari": m})
+	if err != nil {
+		t.Fatalf("FromManifests: %v", err)
+	}
+	sum := sha256.Sum256(src)
+	if got, want := p.Entries[0].SHA256, hex.EncodeToString(sum[:]); got != want {
+		t.Errorf("entry sha256 = %s, want sha256 of the source bytes %s", got, want)
+	}
+
+	// A comment-only edit doesn't change the parsed manifest, but it does
+	// change the file, so it must change the hash.
+	commented, err := artifacts.Parse(append([]byte("# edited\n"), src...))
+	if err != nil {
+		t.Fatalf("parse commented manifest: %v", err)
+	}
+	p2, _ := FromManifests("tool-1.2.3", map[string]*artifacts.Manifest{"browser.safari": commented})
+	if p2.Entries[0].SHA256 == p.Entries[0].SHA256 {
+		t.Error("hash did not change when the manifest file changed")
+	}
+
+	// A manifest built in code has no source bytes to attest to.
+	if _, err := FromManifests("tool-1.2.3", map[string]*artifacts.Manifest{"x": {}}); err == nil {
+		t.Error("FromManifests accepted a manifest with no source bytes")
+	}
+}
