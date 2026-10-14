@@ -57,6 +57,10 @@ var (
 	// hfsPlusMagic and hfsxMagic are the HFS+ and HFSX volume header signatures.
 	hfsPlusMagic = []byte("H+")
 	hfsxMagic    = []byte("HX")
+
+	// gptMagic is the GUID Partition Table header signature, found in the
+	// second logical block of a whole-disk image.
+	gptMagic = []byte("EFI PART")
 )
 
 const (
@@ -69,8 +73,13 @@ const (
 	// hfsMagicOffset is the offset of the HFS+/HFSX volume header signature.
 	hfsMagicOffset = 0x400
 
+	// gptOffset512 and gptOffset4K are where the GPT header sits on a disk
+	// with 512-byte and 4096-byte logical blocks.
+	gptOffset512 = 0x200
+	gptOffset4K  = 0x1000
+
 	// headerSize is how much of the file start we need to test every signature.
-	headerSize = hfsMagicOffset + 2
+	headerSize = gptOffset4K + 8
 
 	// minImageSize is the smallest file that could carry any supported signature.
 	minImageSize = udifTrailerSize
@@ -133,8 +142,10 @@ func DetectFormat(path string) (Format, error) {
 		return FormatDMG, nil
 	}
 
-	// A raw image has no container wrapper, so look for a filesystem instead.
-	if hasFilesystemMagic(header) {
+	// A raw image has no container wrapper, so look for a partition table (a
+	// whole-disk image, as dd of a Mac's disk produces) or a filesystem (an
+	// image of a single volume) instead.
+	if hasGPTHeader(header) || hasFilesystemMagic(header) {
 		return FormatRaw, nil
 	}
 
@@ -163,6 +174,12 @@ func hasKolyTrailer(r io.ReaderAt, size int64) (bool, error) {
 		return false, fmt.Errorf("read image trailer: %w", err)
 	}
 	return bytes.HasPrefix(trailer, kolyMagic), nil
+}
+
+// hasGPTHeader reports whether the header carries a GUID Partition Table header
+// at the second logical block, for either 512-byte or 4096-byte blocks.
+func hasGPTHeader(header []byte) bool {
+	return matchesAt(header, gptOffset512, gptMagic) || matchesAt(header, gptOffset4K, gptMagic)
 }
 
 // hasFilesystemMagic reports whether the header carries an APFS or HFS+/HFSX

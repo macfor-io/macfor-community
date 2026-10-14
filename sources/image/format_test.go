@@ -56,6 +56,26 @@ func TestDetectFormat(t *testing.T) {
 			want:    FormatE01,
 		},
 		{
+			name: "raw GPT disk, 512-byte blocks",
+			file: "disk.dd",
+			content: func() []byte {
+				buf := make([]byte, headerSize)
+				copy(buf[gptOffset512:], gptMagic)
+				return buf
+			}(),
+			want: FormatRaw,
+		},
+		{
+			name: "raw GPT disk, 4096-byte blocks",
+			file: "disk.img",
+			content: func() []byte {
+				buf := make([]byte, headerSize)
+				copy(buf[gptOffset4K:], gptMagic)
+				return buf
+			}(),
+			want: FormatRaw,
+		},
+		{
 			name:    "E01 with misleading extension",
 			file:    "evidence.dd",
 			content: padTo(ewfMagic, minImageSize),
