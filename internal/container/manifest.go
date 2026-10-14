@@ -58,6 +58,7 @@ type SourceInfo struct {
 	OSName       string `json:"os_name,omitempty"`
 	SerialNumber string `json:"serial_number,omitempty"`
 	ImagePath    string `json:"image_path,omitempty"`
+	ImageFormat  string `json:"image_format,omitempty"`
 
 	// Structured system info (MACFOR-SYS-8).
 	OS            *OSInfo            `json:"os,omitempty"`
@@ -158,6 +159,7 @@ func SourceInfoFromSystemInfo(si *macfor.SystemInfo) SourceInfo {
 		OSName:       si.OSName,
 		SerialNumber: si.SerialNumber,
 		ImagePath:    si.ImagePath,
+		ImageFormat:  si.ImageFormat,
 
 		// Nested structs.
 		OS: &OSInfo{
@@ -355,6 +357,9 @@ type CollectionMeta struct {
 	// ImagePath is the disk image path for image sources (optional).
 	ImagePath string
 
+	// ImageFormat is the disk image format for image sources (optional).
+	ImageFormat string
+
 	// SystemInfo is the full system information, if available.
 	// When set, it populates both legacy and nested fields in the manifest.
 	SystemInfo *macfor.SystemInfo
@@ -371,4 +376,15 @@ const (
 	CustodyActionPluginStarted       = "plugin_started"
 	CustodyActionPluginCompleted     = "plugin_completed"
 	CustodyActionError               = "error"
+
+	// CustodyActionImageAttached records a disk image attached read-only as
+	// the collection source.
+	CustodyActionImageAttached = "image_attached"
+
+	// CustodyActionImageDetached records a disk image detached after collection.
+	CustodyActionImageDetached = "image_detached"
+
+	// CustodyActionImageDetachFailed records a failed attempt to detach a disk
+	// image after collection.
+	CustodyActionImageDetachFailed = "image_detach_failed"
 )

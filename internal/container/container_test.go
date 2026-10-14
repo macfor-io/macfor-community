@@ -687,6 +687,36 @@ func TestSourceInfoFromSystemInfo_JSONStructure(t *testing.T) {
 	}
 }
 
+func TestSourceInfoFromSystemInfo_Image(t *testing.T) {
+	si := &macfor.SystemInfo{
+		OSVersion:   testOSVersion,
+		SourceType:  macfor.SourceTypeImage,
+		ImagePath:   "/evidence/suspect.E01",
+		ImageFormat: "e01",
+	}
+
+	info := SourceInfoFromSystemInfo(si)
+	if info.Type != "image" || info.ImagePath != "/evidence/suspect.E01" || info.ImageFormat != "e01" {
+		t.Errorf("SourceInfo = {type %q, image_path %q, image_format %q}", info.Type, info.ImagePath, info.ImageFormat)
+	}
+
+	data, err := json.Marshal(info)
+	if err != nil {
+		t.Fatalf("marshaling SourceInfo: %v", err)
+	}
+	if !strings.Contains(string(data), `"image_format":"e01"`) {
+		t.Errorf("JSON missing image_format: %s", data)
+	}
+
+	live, err := json.Marshal(SourceInfoFromSystemInfo(&macfor.SystemInfo{SourceType: macfor.SourceTypeLive}))
+	if err != nil {
+		t.Fatalf("marshaling live SourceInfo: %v", err)
+	}
+	if strings.Contains(string(live), "image_format") {
+		t.Errorf("live SourceInfo should omit image_format: %s", live)
+	}
+}
+
 func TestContainer_SetCollectionMetadataWithSystemInfo(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "test.zip")

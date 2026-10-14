@@ -29,6 +29,7 @@ var (
 	collectDryRun             bool
 	collectJSON               bool
 	collectFrom               string
+	collectImage              string
 	collectRecordFormat       string
 	collectParquetCompression string
 )
@@ -76,7 +77,8 @@ func newCollectCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   cmdCollect,
 		Short: shortCollect,
-		Long: `Collect forensic artifacts from the current macOS system.
+		Long: `Collect forensic artifacts from the current macOS system, a directory
+tree, or a disk image file.
 
 The collect command discovers applicable plugins, runs detection to determine
 which artifacts are available, and collects them into an evidence container.
@@ -109,6 +111,11 @@ Examples:
   macfor collect --from /Volumes/Macintosh\ HD --output ./evidence.zip
   macfor collect --from /tmp/macos-snapshot --dry-run
 
+  # Collect from a disk image file (DMG, E01, or raw); macfor attaches it
+  # read-only and detaches it when collection ends
+  macfor collect --image ./suspect.dmg --output ./evidence.zip
+  macfor collect --image ./suspect.E01 --dry-run
+
 Exit codes:
   0  Collection completed without errors
   1  Collection failed
@@ -124,6 +131,8 @@ Exit codes:
 	cmd.Flags().BoolVar(&collectDryRun, "dry-run", false, "Show what would be collected without collecting")
 	cmd.Flags().BoolVar(&collectJSON, "json", false, "Output results in JSON format")
 	cmd.Flags().StringVarP(&collectFrom, "from", "f", "", "Collect from a directory tree instead of the live system (e.g. a mounted disk image)")
+	cmd.Flags().StringVar(&collectImage, "image", "",
+		"Collect from a disk image file (DMG, E01, or raw); macfor attaches and detaches it read-only")
 	cmd.Flags().StringVar(&collectRecordFormat, "record-format", "jsonl",
 		`Record output format: "jsonl" (default), "parquet", or "both"`)
 	cmd.Flags().StringVar(&collectParquetCompression, "parquet-compression", "snappy",
@@ -147,6 +156,9 @@ func runCollect(cmd *cobra.Command, _ []string) error {
 	if !collectDryRun && collectOutput == "" {
 		return fmt.Errorf("--output is required (or use --dry-run to preview)")
 	}
+	if collectImage != "" && collectFrom != "" {
+		return errImageAndFrom
+	}
 
 	// Validate record format and compression flags.
 	if _, err := macforparquet.ParseRecordFormat(collectRecordFormat); err != nil {
@@ -162,12 +174,27 @@ func runCollect(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	// Create source (live or directory).
-	src, err := createSource(collectFrom)
+	// Create source (live, directory, or image). The signal-aware ctx lets a
+	// Ctrl-C cancel an image attach in progress.
+	src, err := createSource(ctx, collectFrom, collectImage)
 	if err != nil {
 		return err
 	}
-	if collectFrom == "" {
+
+	// A source holding resources (an attached image) is released on every
+	// exit path: success, error, and signal alike. On a full collection the
+	// image is detached before the container is finalized, so the detach is
+	// recorded in the chain of custody; this deferred Close is the safety net
+	// for every other path and is then a no-op. A detach failure is only
+	// logged, so it never masks the collection's own error.
+	handle := newSourceHandle(src)
+	defer func() {
+		if cerr := handle.Close(); cerr != nil {
+			logger.Warn().Err(cerr).Msg("Detaching image")
+		}
+	}()
+
+	if collectFrom == "" && collectImage == "" {
 		warnIfNoFullDiskAccess(cmd)
 	}
 
@@ -178,12 +205,12 @@ func runCollect(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Handle early exit conditions.
-	if done, exitErr := handleDetectionResult(cmd, detectionResult); done {
+	if done, exitErr := handleDetectionResult(cmd, detectionResult, handle); done {
 		return exitErr
 	}
 
 	// Run collection phase.
-	return runCollectionPhase(ctx, cmd, src, license)
+	return runCollectionPhase(ctx, cmd, handle, license)
 }
 
 // fullDiskAccess reports whether the process has Full Disk Access. It is a
@@ -211,10 +238,28 @@ func warnIfNoFullDiskAccess(cmd *cobra.Command) {
 `)
 }
 
-// createSource creates the appropriate Source based on the --from flag.
-// If fromPath is empty, returns a live system source.
-// If fromPath is set, validates the path and returns a directory source.
-func createSource(fromPath string) (macfor.Source, error) {
+// createSource creates the appropriate Source based on the --from and --image
+// flags. With neither set it returns a live system source. With fromPath set it
+// validates the path and returns a directory source. With imagePath set it
+// validates the path and attaches the image read-only, honouring ctx for
+// cancellation; the returned source implements io.Closer and the caller must
+// close it to detach the image. Setting both is an error.
+func createSource(ctx context.Context, fromPath, imagePath string) (macfor.Source, error) {
+	if fromPath != "" && imagePath != "" {
+		return nil, errImageAndFrom
+	}
+
+	if imagePath != "" {
+		if err := validateImagePath(imagePath); err != nil {
+			return nil, err
+		}
+		src, err := newImageSource(ctx, imagePath)
+		if err != nil {
+			return nil, fmt.Errorf("creating image source: %w", err)
+		}
+		return src, nil
+	}
+
 	if fromPath == "" {
 		src, err := live.New()
 		if err != nil {
@@ -263,7 +308,7 @@ func runDetectionPhase(ctx context.Context, src macfor.Source) (*orchestrator.Re
 
 // handleDetectionResult handles early exit conditions after detection.
 // Returns true if we should exit (done), along with any error.
-func handleDetectionResult(cmd *cobra.Command, result *orchestrator.Result) (bool, error) {
+func handleDetectionResult(cmd *cobra.Command, result *orchestrator.Result, handle *sourceHandle) (bool, error) {
 	if result.Cancelled {
 		logger.Warn().Msg("Collection cancelled by user")
 		return true, context.Canceled
@@ -274,7 +319,7 @@ func handleDetectionResult(cmd *cobra.Command, result *orchestrator.Result) (boo
 	}
 
 	if collectDryRun {
-		return true, outputDryRunResultsFromOrchestrator(cmd, result)
+		return true, outputDryRunResultsFromOrchestrator(cmd, result, handle.describe(collectFrom))
 	}
 
 	if result.ApplicablePlugins() == 0 {
@@ -303,7 +348,7 @@ func outputNoApplicablePlugins(cmd *cobra.Command, result *orchestrator.Result) 
 }
 
 // runCollectionPhase runs the collection phase with a container.
-func runCollectionPhase(ctx context.Context, cmd *cobra.Command, src macfor.Source, license *macfor.LicenseInfo) error {
+func runCollectionPhase(ctx context.Context, cmd *cobra.Command, handle *sourceHandle, license *macfor.LicenseInfo) error {
 	// Prepare output path.
 	outputPath := collectOutput
 	if !strings.HasSuffix(strings.ToLower(outputPath), ".zip") {
@@ -325,15 +370,20 @@ func runCollectionPhase(ctx context.Context, cmd *cobra.Command, src macfor.Sour
 	}
 	defer func() { _ = cont.Close() }()
 
-	// Create and run collection orchestrator.
+	// Create and run collection orchestrator. For an image source the hooks
+	// record the attach in the chain of custody, and detach the image and
+	// record that before the container is finalized.
+	onStart, beforeFinalize := handle.custodyHooks()
 	config := orchestrator.Config{
-		Source:      src,
-		Container:   cont,
-		PluginIDs:   collectPlugins,
-		Category:    collectCategory,
-		ToolVersion: Version,
-		DryRun:      false,
-		License:     license,
+		Source:            handle.src,
+		Container:         cont,
+		PluginIDs:         collectPlugins,
+		Category:          collectCategory,
+		ToolVersion:       Version,
+		DryRun:            false,
+		License:           license,
+		OnCollectionStart: onStart,
+		BeforeFinalize:    beforeFinalize,
 	}
 
 	orch, err := orchestrator.New(config)
@@ -429,14 +479,15 @@ func convertOrchestratorResult(result *orchestrator.Result, containerPath string
 }
 
 // outputDryRunResultsFromOrchestrator outputs dry run results from orchestrator result.
-func outputDryRunResultsFromOrchestrator(cmd *cobra.Command, result *orchestrator.Result) error {
+// sourceDesc names a non-live source, e.g. "image (/path/x.dmg, dmg)"; it is
+// empty for the live system, which prints no source line.
+func outputDryRunResultsFromOrchestrator(cmd *cobra.Command, result *orchestrator.Result, sourceDesc string) error {
 	if collectJSON {
 		return outputCollectResultJSON(cmd, convertOrchestratorResult(result, ""))
 	}
 
-	if collectFrom != "" {
-		absFrom, _ := filepath.Abs(collectFrom)
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Source: directory (%s)\n", absFrom)
+	if sourceDesc != "" {
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Source: %s\n", sourceDesc)
 	}
 
 	// Table output for dry run.

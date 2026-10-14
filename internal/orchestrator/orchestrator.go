@@ -43,6 +43,20 @@ type Config struct {
 	// License is the license the build runs under, recorded in the evidence
 	// container. Nil for builds without a license.
 	License *macfor.LicenseInfo
+
+	// OnCollectionStart, if set, is called with the container once its
+	// collection metadata, manifest provenance, and license are recorded and
+	// before any plugin collects. It is the earliest point at which a
+	// chain-of-custody entry survives into the container: setting the
+	// collection metadata starts a fresh custody log.
+	OnCollectionStart func(*container.Container)
+
+	// BeforeFinalize, if set, is called with the container after the
+	// collection phase, including a cancelled one, and immediately before the
+	// container is finalized. It is the last point at which a chain-of-custody
+	// entry reaches the container; a source that holds resources, such as an
+	// attached disk image, releases them here so the release is recorded.
+	BeforeFinalize func(*container.Container)
 }
 
 // Result contains the results of an orchestration run.
@@ -264,11 +278,19 @@ func (o *Orchestrator) Run(ctx context.Context) (*Result, error) {
 	// Record the license the build runs under.
 	o.config.Container.SetLicense(o.config.License)
 
+	if o.config.OnCollectionStart != nil {
+		o.config.OnCollectionStart(o.config.Container)
+	}
+
 	// Run collection phase.
 	collectionResults := o.runCollection(ctx, applicablePlugins, detectionResults)
 
 	// Check for cancellation after collection.
 	cancelled := ctx.Err() != nil
+
+	if o.config.BeforeFinalize != nil {
+		o.config.BeforeFinalize(o.config.Container)
+	}
 
 	// Finalize container.
 	o.reportProgress(Progress{

@@ -101,6 +101,7 @@ func resetCollectFlags() {
 	collectDryRun = false
 	collectJSON = false
 	collectFrom = ""
+	collectImage = ""
 }
 
 func TestCollectCommand_MissingOutput(t *testing.T) {

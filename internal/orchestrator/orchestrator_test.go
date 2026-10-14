@@ -786,3 +786,78 @@ func TestProgressPhase_Values(t *testing.T) {
 		seen[p] = true
 	}
 }
+
+func TestOrchestrator_LifecycleHooks(t *testing.T) {
+	cleanup := registerMockPlugins()
+	defer cleanup()
+
+	outputPath := filepath.Join(t.TempDir(), "evidence.zip")
+	cont, err := container.NewContainer(container.Config{OutputPath: outputPath})
+	if err != nil {
+		t.Fatalf("failed to create container: %v", err)
+	}
+	defer func() { _ = cont.Close() }()
+
+	var calls []string
+	o, err := New(Config{
+		Source:      &mockSource{},
+		Container:   cont,
+		ToolVersion: "1.0.0",
+		OnCollectionStart: func(c *container.Container) {
+			if c != cont {
+				t.Error("OnCollectionStart got a different container")
+			}
+			calls = append(calls, "start")
+		},
+		BeforeFinalize: func(c *container.Container) {
+			if c != cont {
+				t.Error("BeforeFinalize got a different container")
+			}
+			calls = append(calls, "before_finalize")
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to create orchestrator: %v", err)
+	}
+	o.SetProgressCallback(func(p Progress) {
+		if p.Phase == PhaseCollection && p.PluginID != "" {
+			calls = append(calls, "collect")
+		}
+		if p.Phase == PhaseFinalize {
+			calls = append(calls, "finalize")
+		}
+	})
+
+	if _, err := o.Run(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	want := []string{"start", "collect", "collect", "before_finalize", "finalize"}
+	if len(calls) != len(want) {
+		t.Fatalf("calls = %v, want %v", calls, want)
+	}
+	for i := range want {
+		if calls[i] != want[i] {
+			t.Fatalf("calls = %v, want %v", calls, want)
+		}
+	}
+}
+
+func TestOrchestrator_LifecycleHooksSkippedOnDryRun(t *testing.T) {
+	cleanup := registerMockPlugins()
+	defer cleanup()
+
+	hook := func(*container.Container) { t.Error("hook called on a dry run") }
+	o, err := New(Config{
+		Source:            &mockSource{},
+		DryRun:            true,
+		OnCollectionStart: hook,
+		BeforeFinalize:    hook,
+	})
+	if err != nil {
+		t.Fatalf("failed to create orchestrator: %v", err)
+	}
+	if _, err := o.Run(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
