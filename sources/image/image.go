@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/macfor-io/macfor-community/pkg/macfor"
+	"github.com/macfor-io/macfor-community/pkg/macfor/artifacts"
 	"github.com/macfor-io/macfor-community/sources/directory"
 )
 
@@ -42,7 +43,14 @@ type Source struct {
 
 	// dir serves the attached volumes as one filesystem.
 	dir *directory.Source
+
+	// warnings describe content of the image that collection cannot reach.
+	warnings []string
 }
+
+// splitVolumeMinOS is the first macOS release that keeps user data on a
+// separate Data volume.
+const splitVolumeMinOS = "10.15"
 
 // New detects the format of the image at imagePath, attaches it read-only
 // (mounting it with ewfmount first for E01), and returns a Source over its
@@ -80,7 +88,40 @@ func newWith(ctx context.Context, imagePath string, attachFn attachFunc) (*Sourc
 		return nil, errors.Join(fmt.Errorf("open image %s: %w", abs, err), a.cleanup())
 	}
 
-	return &Source{path: abs, format: format, att: a, dir: dir}, nil
+	src := &Source{path: abs, format: format, att: a, dir: dir}
+	src.warnings = src.reachabilityWarnings()
+	return src, nil
+}
+
+// reachabilityWarnings reports image content that collection cannot reach, so
+// a collection that silently finds little is never mistaken for a Mac with
+// little on it: volumes that attached without mounting (typically a
+// FileVault-encrypted Data volume, which macfor does not unlock), and a macOS
+// 10.15+ System volume with no Data volume beside it and no home directories
+// of its own.
+func (s *Source) reachabilityWarnings() []string {
+	var warnings []string
+	for _, dev := range s.att.unmounted {
+		warnings = append(warnings, fmt.Sprintf(
+			"volume %s on the image did not mount (it may be encrypted or damaged); its contents are not collected", dev))
+	}
+
+	if s.att.data == "" {
+		version, _ := s.dir.OSVersion()
+		users, _ := s.dir.Users()
+		if artifacts.VersionAtLeast(version, splitVolumeMinOS) && len(users) == 0 {
+			warnings = append(warnings, fmt.Sprintf(
+				"macOS %s keeps user data on a separate Data volume, which is not mounted from this image; "+
+					"user accounts and their artifacts will be missing", version))
+		}
+	}
+	return warnings
+}
+
+// Warnings describes content of the image that collection cannot reach, such
+// as a volume that did not mount. It is empty when every volume is readable.
+func (s *Source) Warnings() []string {
+	return append([]string(nil), s.warnings...)
 }
 
 // Close detaches the image and, for E01, unmounts the ewfmount FUSE mount and

@@ -67,9 +67,9 @@ func TestSystemInfo_Timezone(t *testing.T) {
 			name: "absolute symlink not followed",
 			setup: func(t *testing.T, root string) {
 				// The target does not exist on the host; reading it would fail.
-				writeLocaltimeLink(t, root, "/var/db/timezone/zoneinfo/Pacific/Chatham")
+				writeLocaltimeLink(t, root, "/var/db/timezone/zoneinfo/Antarctica/Macfor_Test")
 			},
-			want: "Pacific/Chatham",
+			want: "Antarctica/Macfor_Test",
 		},
 		{
 			name: "relative symlink",
@@ -155,11 +155,11 @@ func TestSystemInfo_Timezone_Layered(t *testing.T) {
 	tree := buildLayeredTree(t)
 	// The System root has private/etc but no localtime; the link lives on Data.
 	mustMkdir(t, filepath.Join(tree.system, "private", "etc"))
-	writeLocaltimeLink(t, tree.data, "/var/db/timezone/zoneinfo/Pacific/Chatham")
+	writeLocaltimeLink(t, tree.data, "/var/db/timezone/zoneinfo/Antarctica/Macfor_Test")
 
 	info := systemInfo(t, tree.system, tree.data)
-	if info.Timezone != "Pacific/Chatham" {
-		t.Errorf("Timezone = %q, want %q", info.Timezone, "Pacific/Chatham")
+	if info.Timezone != "Antarctica/Macfor_Test" {
+		t.Errorf("Timezone = %q, want %q", info.Timezone, "Antarctica/Macfor_Test")
 	}
 }
 
@@ -206,7 +206,7 @@ func TestSystemInfo_Architecture(t *testing.T) {
 func TestSystemInfo_HostStateNotDerived(t *testing.T) {
 	root := macostree.MustBuild(t, macostree.Defaults())
 	writePlatformPlist(t, root, "Mac14,2")
-	writeLocaltimeLink(t, root, "/var/db/timezone/zoneinfo/Pacific/Chatham")
+	writeLocaltimeLink(t, root, "/var/db/timezone/zoneinfo/Antarctica/Macfor_Test")
 
 	info := systemInfo(t, root)
 	if !info.BootTime.IsZero() {
@@ -244,6 +244,7 @@ func TestZoneFromLinkTarget(t *testing.T) {
 // TestSystemInfoCollectionHostFields checks that the collection fields describe
 // the host running macfor rather than anything in the collected tree.
 func TestSystemInfoCollectionHostFields(t *testing.T) {
+	t.Setenv("USER", "macfor-collector-test")
 	src, err := New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -252,8 +253,8 @@ func TestSystemInfoCollectionHostFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.CollectionUser != os.Getenv("USER") {
-		t.Errorf("CollectionUser = %q, want %q", info.CollectionUser, os.Getenv("USER"))
+	if info.CollectionUser != "macfor-collector-test" {
+		t.Errorf("CollectionUser = %q, want the collecting user %q", info.CollectionUser, "macfor-collector-test")
 	}
 	if info.CollectionUID != os.Getuid() || info.IsRoot != (os.Getuid() == 0) {
 		t.Errorf("CollectionUID/IsRoot = %d/%v, want %d/%v", info.CollectionUID, info.IsRoot, os.Getuid(), os.Getuid() == 0)

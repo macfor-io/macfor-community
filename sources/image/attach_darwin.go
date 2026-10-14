@@ -24,8 +24,8 @@ func attachEWF(ctx context.Context, path string) (*attachment, error) {
 // defaultEWFTools returns the production tools backed by os/exec and os.
 func defaultEWFTools() ewfTools {
 	return ewfTools{
-		runner:    execRunner{},
-		lookPath:  exec.LookPath,
-		removeAll: os.RemoveAll,
+		runner:   execRunner{},
+		lookPath: exec.LookPath,
+		remove:   os.Remove,
 	}
 }

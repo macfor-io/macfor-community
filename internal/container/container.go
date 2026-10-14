@@ -223,7 +223,6 @@ func (c *Container) SetCollectionMetadata(meta CollectionMeta) {
 			OSName:       meta.OSName,
 			SerialNumber: meta.SerialNumber,
 			ImagePath:    meta.ImagePath,
-			ImageFormat:  meta.ImageFormat,
 		}
 	}
 

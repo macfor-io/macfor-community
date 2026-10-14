@@ -472,3 +472,70 @@ func TestLayered_SystemInfo(t *testing.T) {
 		t.Errorf("SourceType = %v, want %v", info.SourceType, macfor.SourceTypeDirectory)
 	}
 }
+
+// TestLayered_DataFirstProductionOrder layers the roots in the order the image
+// source uses, Data before System, and pins the precedence that order gives.
+// The other layered tests put System first; this is the order that matters.
+func TestLayered_DataFirstProductionOrder(t *testing.T) {
+	tree := buildLayeredTree(t)
+	src, err := NewLayered(tree.data, tree.system)
+	if err != nil {
+		t.Fatalf("NewLayered() error = %v", err)
+	}
+
+	// Duplicate files resolve to the Data copy.
+	if got := readAll(t, src, "/etc/marker"); got != "data" {
+		t.Errorf("/etc/marker = %q, want the Data copy", got)
+	}
+	if got := readAll(t, src, "/Applications/C.txt"); got != "data-c" {
+		t.Errorf("/Applications/C.txt = %q, want the Data copy", got)
+	}
+
+	// Common is a file on Data and a directory on System: Data's file wins.
+	info, err := src.Stat("/Applications/Common")
+	if err != nil {
+		t.Fatalf("Stat(/Applications/Common) error = %v", err)
+	}
+	if info.IsDir() {
+		t.Error("/Applications/Common is the System directory, want the Data file")
+	}
+
+	// A path under Common does not exist on Data (Common is a file there, so the
+	// lookup fails with ENOTDIR, which counts as absent) and resolves on System.
+	if _, err := src.Stat("/Applications/Common/Contents"); err != nil {
+		t.Errorf("Stat(/Applications/Common/Contents) error = %v, want it served from System", err)
+	}
+
+	// Listings merge both roots.
+	entries, err := src.ReadDir("/Applications")
+	if err != nil {
+		t.Fatalf("ReadDir(/Applications) error = %v", err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	if want := []string{"A.txt", "B.txt", "C.txt", "Common"}; !slices.Equal(names, want) {
+		t.Errorf("ReadDir(/Applications) = %v, want %v", names, want)
+	}
+
+	// Identity comes from both volumes: users from Data, OS version from System.
+	users, err := src.Users()
+	if err != nil || len(users) != 1 || users[0].Username != "alice" || users[0].UID != 501 {
+		t.Errorf("Users() = %+v, %v; want alice (501) from Data", users, err)
+	}
+	if v, _ := src.OSVersion(); v != macostree.Defaults().OSVersion {
+		t.Errorf("OSVersion() = %q, want %q from System", v, macostree.Defaults().OSVersion)
+	}
+}
+
+// TestGlob_BadPattern checks a malformed pattern is reported, as filepath.Glob does.
+func TestGlob_BadPattern(t *testing.T) {
+	src, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := src.Glob("/Users/[a-"); err == nil {
+		t.Error("Glob with a malformed pattern returned no error")
+	}
+}

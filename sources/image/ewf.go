@@ -38,9 +38,10 @@ type ewfTools struct {
 	// lookPath resolves the ewfmount binary; production uses exec.LookPath.
 	lookPath func(file string) (string, error)
 
-	// removeAll deletes the mount dir after unmounting; production uses
-	// os.RemoveAll.
-	removeAll func(path string) error
+	// remove deletes the empty mount dir after unmounting; production uses
+	// os.Remove, which is not recursive, so it fails rather than reaching into
+	// a mount that is somehow still live.
+	remove func(path string) error
 
 	// tempDir is the parent of the mount dir; empty means os.TempDir.
 	tempDir string
@@ -50,8 +51,8 @@ type ewfTools struct {
 // FUSE-mounts the EWF container onto a private temp dir. The caller must call
 // unmount, directly or through the owning attachment's detach.
 type ewfMount struct {
-	runner    commandRunner
-	removeAll func(path string) error
+	runner commandRunner
+	remove func(path string) error
 
 	// dir is the private (0700) temp dir ewfmount mounted onto.
 	dir string
@@ -96,14 +97,14 @@ func mountEWF(ctx context.Context, tools ewfTools, imagePath string) (*ewfMount,
 		return nil, fmt.Errorf("mount %s: create mount dir: %w", imagePath, err)
 	}
 
-	m := &ewfMount{runner: tools.runner, removeAll: tools.removeAll, dir: dir}
+	m := &ewfMount{runner: tools.runner, remove: tools.remove, dir: dir}
 
 	setupCtx, cancel := uncancellable(ctx)
 	defer cancel()
 	if _, err := tools.runner.Run(setupCtx, ewfmount, imagePath, dir); err != nil {
 		// Nothing is mounted, so only the dir needs removing.
 		m.removed = true
-		return nil, errors.Join(fmt.Errorf("mount %s: %w", imagePath, err), m.removeAll(dir))
+		return nil, errors.Join(fmt.Errorf("mount %s: %w", imagePath, err), m.remove(dir))
 	}
 	m.mounted = true
 
@@ -135,7 +136,7 @@ func (m *ewfMount) unmount(ctx context.Context) error {
 	}
 
 	if !m.removed {
-		if err := m.removeAll(m.dir); err != nil {
+		if err := m.remove(m.dir); err != nil {
 			return fmt.Errorf("remove mount dir %s: %w", m.dir, err)
 		}
 		m.removed = true

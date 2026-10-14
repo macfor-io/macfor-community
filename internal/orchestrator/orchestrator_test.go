@@ -861,3 +861,41 @@ func TestOrchestrator_LifecycleHooksSkippedOnDryRun(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+// TestOrchestrator_BeforeFinalizeRunsWhenCancelled checks the documented
+// guarantee that BeforeFinalize runs after a cancelled collection, so a
+// source that holds resources (an attached image) is released and recorded.
+func TestOrchestrator_BeforeFinalizeRunsWhenCancelled(t *testing.T) {
+	cleanup := registerMockPlugins()
+	defer cleanup()
+
+	outputPath := filepath.Join(t.TempDir(), "evidence.zip")
+	cont, err := container.NewContainer(container.Config{OutputPath: outputPath})
+	if err != nil {
+		t.Fatalf("failed to create container: %v", err)
+	}
+	defer func() { _ = cont.Close() }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	beforeFinalize := 0
+	o, err := New(Config{
+		Source:            &mockSource{},
+		Container:         cont,
+		ToolVersion:       "1.0.0",
+		OnCollectionStart: func(*container.Container) { cancel() },
+		BeforeFinalize:    func(*container.Container) { beforeFinalize++ },
+	})
+	if err != nil {
+		t.Fatalf("failed to create orchestrator: %v", err)
+	}
+
+	result, _ := o.Run(ctx)
+	if result == nil || !result.Cancelled {
+		t.Fatalf("result = %+v, want a cancelled run", result)
+	}
+	if beforeFinalize != 1 {
+		t.Errorf("BeforeFinalize calls = %d, want 1 on a cancelled run", beforeFinalize)
+	}
+}

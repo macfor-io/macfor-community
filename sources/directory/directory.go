@@ -97,7 +97,9 @@ func (s *Source) Type() macfor.SourceType {
 
 // joinRoot translates a source-absolute path to a host-absolute path under root.
 // It enforces that the resolved path stays within root to prevent path
-// traversal attacks.
+// traversal attacks. The result is lexical: it is used for error messages and
+// to derive the root-relative name, never to open a file, because opening it
+// would follow symlinks out of the root (see rootRel).
 func joinRoot(root, path string) (string, error) {
 	// Strip leading slash before joining.
 	stripped := strings.TrimPrefix(filepath.ToSlash(path), "/")
@@ -112,38 +114,93 @@ func joinRoot(root, path string) (string, error) {
 	return resolved, nil
 }
 
-// resolve translates a source-absolute path to a host-absolute path.
-// See locate for how a root is chosen.
-func (s *Source) resolve(path string) (string, error) {
-	_, resolved, err := s.locate(path)
-	return resolved, err
+// rootRel returns path relative to root ("." for the root itself), after the
+// lexical traversal guard of joinRoot.
+//
+// Every file operation then goes through an os.Root opened on the root, which
+// resolves symlinks inside the tree but refuses any that lead outside it. The
+// tree is evidence and may be hostile: a symlink such as
+// Users/alice/Library -> /Users/investigator/Library would otherwise make the
+// collector read, and record as evidence, files from the machine running it.
+// A symlink that escapes the root fails with an error rather than being
+// followed.
+func rootRel(root, path string) (string, error) {
+	joined, err := joinRoot(root, path)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(root, joined)
+	if err != nil {
+		return "", macfor.WrapPermissionDenied(path, fmt.Errorf("path traversal detected"))
+	}
+	return rel, nil
 }
 
-// locate returns the index of the root that serves path and the host path in
-// that root. The serving root is the first root in which the path exists. If a
-// root reports an error other than absence (e.g., permission denied), that root
-// is chosen so the caller surfaces the error rather than masking it with a
-// later root. If no root has the path, the first root is chosen so the caller
-// reports the first root's not-found error. The path-traversal guard is applied
-// per root.
-func (s *Source) locate(path string) (int, string, error) {
-	var first string
-	for i, r := range s.roots {
-		resolved, err := joinRoot(r, path)
-		if err != nil {
-			return 0, "", err
+// inRoot runs fn with root i opened as an os.Root and path made relative to it.
+// The root is opened per call rather than held, so the Source keeps no file
+// descriptor on the tree; an open descriptor on a mounted image would make its
+// detach fail as busy.
+func (s *Source) inRoot(i int, path string, fn func(r *os.Root, rel string) error) error {
+	rel, err := rootRel(s.roots[i], path)
+	if err != nil {
+		return err
+	}
+	r, err := os.OpenRoot(s.roots[i])
+	if err != nil {
+		return err
+	}
+	defer func() { _ = r.Close() }()
+
+	err = fn(r, rel)
+	// os.Root reports names relative to the root; restore the host path so
+	// errors say which root and file they concern, as they did before.
+	var pe *fs.PathError
+	if errors.As(err, &pe) && !filepath.IsAbs(pe.Path) {
+		pe.Path = filepath.Join(s.roots[i], pe.Path)
+	}
+	return err
+}
+
+// locate returns the index of the root that serves path: the first root in
+// which the path exists. If a root reports an error other than absence (e.g.,
+// permission denied, or a symlink escaping the root), that root is chosen so
+// the caller surfaces the error rather than masking it with a later root. If no
+// root has the path, the first root is chosen so the caller reports the first
+// root's not-found error. The path-traversal guard is applied per root.
+func (s *Source) locate(path string) (int, error) {
+	if len(s.roots) == 1 {
+		_, err := rootRel(s.roots[0], path)
+		return 0, err
+	}
+	for i := range s.roots {
+		var statErr error
+		if err := s.inRoot(i, path, func(r *os.Root, rel string) error {
+			_, statErr = r.Lstat(rel)
+			return nil
+		}); err != nil {
+			return 0, err
 		}
-		if len(s.roots) == 1 {
-			return 0, resolved, nil
-		}
-		if i == 0 {
-			first = resolved
-		}
-		if _, err := os.Lstat(resolved); err == nil || !isAbsent(err) {
-			return i, resolved, nil
+		if statErr == nil || !isAbsent(statErr) {
+			return i, nil
 		}
 	}
-	return 0, first, nil
+	return 0, nil
+}
+
+// lstat returns the file information for path in the root that serves it,
+// without following a final symlink.
+func (s *Source) lstat(path string) (fs.FileInfo, error) {
+	idx, err := s.locate(path)
+	if err != nil {
+		return nil, err
+	}
+	var info fs.FileInfo
+	err = s.inRoot(idx, path, func(r *os.Root, rel string) error {
+		var statErr error
+		info, statErr = r.Lstat(rel)
+		return statErr
+	})
+	return info, err
 }
 
 // isAbsent reports whether err means a path does not exist in a root. ENOTDIR
@@ -155,12 +212,17 @@ func isAbsent(err error) bool {
 // Open opens the file at the given path for reading.
 // The caller is responsible for closing the returned reader.
 func (s *Source) Open(path string) (io.ReadCloser, error) {
-	resolved, err := s.resolve(path)
+	idx, err := s.locate(path)
 	if err != nil {
 		return nil, err
 	}
 
-	f, err := os.Open(resolved) //nolint:gosec // G304: Intentional file access for forensic collection.
+	var f *os.File
+	err = s.inRoot(idx, path, func(r *os.Root, rel string) error {
+		var openErr error
+		f, openErr = r.Open(rel)
+		return openErr
+	})
 	if err != nil {
 		return nil, wrapOSError("open", path, err)
 	}
@@ -171,16 +233,30 @@ func (s *Source) Open(path string) (io.ReadCloser, error) {
 // The returned FileInfo includes forensically relevant timestamps
 // (access time, change time, birth time) when available on the platform.
 func (s *Source) Stat(path string) (macfor.FileInfo, error) {
-	resolved, err := s.resolve(path)
-	if err != nil {
-		return nil, err
-	}
-
-	info, err := os.Lstat(resolved)
+	info, err := s.lstat(path)
 	if err != nil {
 		return nil, wrapOSError("stat", path, err)
 	}
 	return newFileInfo(info), nil
+}
+
+// Readlink returns the target of the symlink at path without following it. The
+// target is returned as stored and may point outside the tree.
+func (s *Source) Readlink(path string) (string, error) {
+	idx, err := s.locate(path)
+	if err != nil {
+		return "", err
+	}
+	var target string
+	err = s.inRoot(idx, path, func(r *os.Root, rel string) error {
+		var linkErr error
+		target, linkErr = r.Readlink(rel)
+		return linkErr
+	})
+	if err != nil {
+		return "", wrapOSError("readlink", path, err)
+	}
+	return target, nil
 }
 
 // ReadDir reads the directory at the given path and returns
@@ -202,17 +278,37 @@ func (s *Source) ReadDir(path string) ([]macfor.DirEntry, error) {
 	return result, nil
 }
 
+// readDirIn lists path within root i, sorted by name.
+func (s *Source) readDirIn(i int, path string) ([]fs.DirEntry, error) {
+	var entries []fs.DirEntry
+	err := s.inRoot(i, path, func(r *os.Root, rel string) error {
+		d, openErr := r.Open(rel)
+		if openErr != nil {
+			return openErr
+		}
+		defer func() { _ = d.Close() }()
+		var readErr error
+		entries, readErr = d.ReadDir(-1)
+		return readErr
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(entries, func(a, b int) bool { return entries[a].Name() < entries[b].Name() })
+	return entries, nil
+}
+
 // readDirMerged lists path across all roots, sorted by name. Errors from the
 // serving root (see locate) are returned unwrapped, as are permission errors
 // from later roots. Later roots that lack the directory, or have a non-directory
 // at that path, are skipped.
 func (s *Source) readDirMerged(path string) ([]fs.DirEntry, error) {
-	idx, resolved, err := s.locate(path)
+	idx, err := s.locate(path)
 	if err != nil {
 		return nil, err
 	}
 
-	entries, err := os.ReadDir(resolved)
+	entries, err := s.readDirIn(idx, path)
 	if err != nil || idx == len(s.roots)-1 {
 		return entries, err
 	}
@@ -221,12 +317,8 @@ func (s *Source) readDirMerged(path string) ([]fs.DirEntry, error) {
 	for _, e := range entries {
 		seen[e.Name()] = struct{}{}
 	}
-	for _, r := range s.roots[idx+1:] {
-		hostPath, joinErr := joinRoot(r, path)
-		if joinErr != nil {
-			return nil, joinErr
-		}
-		more, readErr := os.ReadDir(hostPath)
+	for i := idx + 1; i < len(s.roots); i++ {
+		more, readErr := s.readDirIn(i, path)
 		if readErr != nil {
 			if os.IsPermission(readErr) {
 				return nil, readErr
@@ -241,92 +333,84 @@ func (s *Source) readDirMerged(path string) ([]fs.DirEntry, error) {
 			entries = append(entries, e)
 		}
 	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+	sort.Slice(entries, func(a, b int) bool { return entries[a].Name() < entries[b].Name() })
 	return entries, nil
 }
 
 // Glob returns all files matching the pattern.
 // The pattern uses source-absolute paths (e.g., /Users/*/Library/*.db)
-// and results are returned as source-absolute paths. For a layered source the
-// result is the de-duplicated, sorted union of matches across all roots.
+// and results are returned as source-absolute paths. For a layered source
+// matches come from the merged view, so each path appears once.
+//
+// The pattern is matched one path component at a time over the source's own
+// directory listings, rather than with filepath.Glob on the host, which would
+// follow symlinks out of the tree. Like filepath.Glob, I/O errors are ignored
+// and the only possible error is a malformed pattern; matches are ordered by
+// path component.
 func (s *Source) Glob(pattern string) ([]string, error) {
-	// Strip leading slash.
-	stripped := strings.TrimPrefix(filepath.ToSlash(pattern), "/")
-
-	result := []string{}
-	seen := make(map[string]struct{})
-	for _, r := range s.roots {
-		rootedPattern := filepath.Join(r, filepath.FromSlash(stripped))
-
-		matches, err := filepath.Glob(rootedPattern)
-		if err != nil {
-			return nil, macfor.WrapIOError("glob", pattern, err)
-		}
-
-		// Translate back to source-absolute paths.
-		for _, m := range matches {
-			rel, relErr := filepath.Rel(r, m)
-			if relErr != nil {
-				continue
-			}
-			sourcePath := "/" + filepath.ToSlash(rel)
-			if _, dup := seen[sourcePath]; dup {
-				continue
-			}
-			seen[sourcePath] = struct{}{}
-			result = append(result, sourcePath)
-		}
+	if _, err := filepath.Match(pattern, ""); err != nil {
+		return nil, macfor.WrapIOError("glob", pattern, err)
 	}
 
-	if len(s.roots) > 1 {
-		sort.Strings(result)
+	cleaned := filepath.ToSlash(filepath.Clean("/" + strings.TrimPrefix(filepath.ToSlash(pattern), "/")))
+	matches := []string{"/"}
+	for _, part := range strings.Split(strings.TrimPrefix(cleaned, "/"), "/") {
+		if part == "" {
+			continue
+		}
+		var next []string
+		for _, dir := range matches {
+			if !hasGlobMeta(part) {
+				candidate := joinSource(dir, part)
+				if _, err := s.lstat(candidate); err == nil {
+					next = append(next, candidate)
+				}
+				continue
+			}
+			entries, err := s.readDirMerged(dir)
+			if err != nil {
+				continue
+			}
+			for _, e := range entries {
+				if ok, _ := filepath.Match(part, e.Name()); ok {
+					next = append(next, joinSource(dir, e.Name()))
+				}
+			}
+		}
+		matches = next
 	}
-	return result, nil
+
+	if len(matches) == 1 && matches[0] == "/" {
+		return []string{}, nil
+	}
+	if matches == nil {
+		return []string{}, nil
+	}
+	return matches, nil
+}
+
+// hasGlobMeta reports whether part contains a filepath.Match metacharacter.
+func hasGlobMeta(part string) bool {
+	return strings.ContainsAny(part, `*?[\`)
+}
+
+// joinSource appends name to the source-absolute directory dir.
+func joinSource(dir, name string) string {
+	if dir == "/" {
+		return "/" + name
+	}
+	return dir + "/" + name
 }
 
 // Walk walks the file tree rooted at root, calling fn for each file
 // or directory in the tree, including root. Paths passed to fn are
 // source-absolute (with leading /). For a layered source every source path is
 // visited once across all roots, the first root winning, and fs.SkipDir and
-// fs.SkipAll follow filepath.WalkDir semantics over the merged tree.
+// fs.SkipAll follow filepath.WalkDir semantics over the merged tree. Symlinks
+// are reported, never followed.
 func (s *Source) Walk(root string, fn macfor.WalkFunc) error {
-	if len(s.roots) > 1 {
-		return s.walkLayered(root, fn)
-	}
-
-	resolved, err := s.resolve(root)
-	if err != nil {
-		return err
-	}
-
-	return filepath.WalkDir(resolved, func(hostPath string, _ fs.DirEntry, walkErr error) error {
-		rel, relErr := filepath.Rel(s.root, hostPath)
-		if relErr != nil {
-			return fmt.Errorf("relativize path: %w", relErr)
-		}
-		sourcePath := "/" + filepath.ToSlash(rel)
-
-		var info macfor.FileInfo
-		if walkErr == nil {
-			// Get full file info including forensic timestamps.
-			osInfo, statErr := os.Lstat(hostPath)
-			if statErr != nil {
-				walkErr = wrapOSError("stat", sourcePath, statErr)
-			} else {
-				info = newFileInfo(osInfo)
-			}
-		} else {
-			walkErr = wrapOSError("walk", sourcePath, walkErr)
-		}
-
-		return fn(sourcePath, info, walkErr)
-	})
-}
-
-// walkLayered walks the merged tree of a layered source starting at root.
-func (s *Source) walkLayered(root string, fn macfor.WalkFunc) error {
-	// The join is lexical and identical in every root, so the primary root
-	// yields the same source path the single-root walk reports (e.g., "/." for "/").
+	// The join is lexical, so the start path is reported exactly as before
+	// (e.g., "/." for "/").
 	hostPath, err := joinRoot(s.root, root)
 	if err != nil {
 		return err
@@ -346,12 +430,7 @@ func (s *Source) walkLayered(root string, fn macfor.WalkFunc) error {
 // walkMerged visits sourcePath and, if it is a directory, its merged children.
 // It mirrors the control flow of filepath.WalkDir.
 func (s *Source) walkMerged(sourcePath string, fn macfor.WalkFunc) error {
-	resolved, err := s.resolve(sourcePath)
-	if err != nil {
-		return err
-	}
-
-	osInfo, statErr := os.Lstat(resolved)
+	osInfo, statErr := s.lstat(sourcePath)
 	if statErr != nil {
 		return fn(sourcePath, nil, wrapOSError("walk", sourcePath, statErr))
 	}

@@ -543,7 +543,10 @@ func TestNewWithCancelledContextAttachesNothing(t *testing.T) {
 // completes anyway, and loses the plist output naming the device to detach.
 // attachWith therefore lets hdiutil finish and then detaches (see
 // uncancellable). This regressed reliably on a warm attach (the image was
-// attached recently), which this test arranges.
+// attached recently), which this test arranges. Real timing decides whether the
+// deadline lands mid-attach, so this is a real-world check; the deterministic
+// guard is TestAttachWith's "cancelled during attach detaches" case, which
+// fails if hdiutil attach runs on the caller's context.
 func TestCancelDuringAttachLeavesNothingAttached(t *testing.T) {
 	f := getFixtures(t)
 
@@ -830,11 +833,9 @@ func TestRawVolumeImage(t *testing.T) {
 }
 
 // TestRawWholeDiskImage covers a raw image of a GPT-partitioned disk, the
-// shape dd of a whole Mac disk produces. hdiutil attaches it with the
-// CRawDiskImage image key; DetectFormat, however, only recognises filesystem
-// magics at volume offsets (APFS NXSB at 0x20, HFS+ at 0x400), which an
-// unpartitioned volume has but a partitioned disk does not: its first sectors
-// hold a protective MBR and the "EFI PART" GPT header at 0x200.
+// shape dd of a whole Mac disk produces. Such an image has no filesystem
+// signature at a volume offset; DetectFormat recognises it by the "EFI PART"
+// GPT header at 0x200, and hdiutil attaches it with the CRawDiskImage key.
 func TestRawWholeDiskImage(t *testing.T) {
 	f := getFixtures(t)
 
@@ -912,4 +913,218 @@ func TestE01Image(t *testing.T) {
 		t.Errorf("provenance = %q %q, want e01 %q", info.ImageFormat, info.ImagePath, e01)
 	}
 	assertSourceReads(t, src)
+}
+
+// -----------------------------------------------------------------------------
+// Split System + Data Volumes
+// -----------------------------------------------------------------------------
+
+const (
+	// splitVolName is the System volume of the split-volume image; the Data
+	// volume is named after it, as macOS names "Macintosh HD - Data".
+	splitVolName = "MacforITSplit"
+
+	// splitVaultName is an encrypted volume left locked, standing in for a
+	// FileVault-protected volume that cannot mount.
+	splitVaultName = "MacforITVault"
+
+	// diskutilPath is the absolute path of diskutil.
+	diskutilPath = "/usr/sbin/diskutil"
+)
+
+var (
+	splitOnce  sync.Once
+	splitImage string
+	errSplit   error
+)
+
+// buildSplitVolumeImage builds a UDIF image whose APFS container holds a System
+// volume (SystemVersion.plist and an empty Users placeholder), a separate Data
+// volume (homes, account plists, preferences), and a locked encrypted volume.
+//
+// Creating a real APFS volume group needs root, so the Data volume is not
+// grouped with System. The image source classifies volumes by content, not by
+// group membership, so this exercises the same code against real hdiutil
+// output. Every disk identifier used is taken from this image's own attach
+// output, so no other disk can be touched.
+func buildSplitVolumeImage(ctx context.Context, f *imageFixtures) (string, error) {
+	dir := filepath.Join(f.dir, "split")
+	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // Test fixture directory.
+		return "", err
+	}
+	sparse := filepath.Join(dir, "split.sparseimage")
+	if err := runHdiutil(ctx, "create", "-quiet", "-size", "2g", "-type", "SPARSE", "-fs", "APFS",
+		"-volname", splitVolName, sparse); err != nil {
+		return "", fmt.Errorf("create sparse image: %w", err)
+	}
+
+	out, err := execRunner{}.Run(ctx, hdiutilPath, "attach", "-nobrowse", "-plist", sparse)
+	if err != nil {
+		return "", fmt.Errorf("attach sparse image: %w", err)
+	}
+	entities, err := parseAttachPlist(out)
+	if err != nil {
+		return "", err
+	}
+	top := topLevelDevNode(entities)
+	defer func() { _ = runHdiutil(context.Background(), "detach", "-force", top) }()
+
+	var container, systemMount string
+	for _, e := range entities {
+		if e.ContentHint == apfsContainerHint {
+			container = e.DevEntry
+		}
+		if e.MountPoint != "" {
+			systemMount = e.MountPoint
+		}
+	}
+	if container == "" || systemMount == "" || top == "" {
+		return "", fmt.Errorf("unexpected attach output for %s: %+v", sparse, entities)
+	}
+
+	diskutil := func(args ...string) error {
+		_, err := execRunner{}.Run(ctx, diskutilPath, args...)
+		return err
+	}
+	dataName := splitVolName + " - Data"
+	if err := diskutil("apfs", "addVolume", container, "APFS", dataName); err != nil {
+		return "", fmt.Errorf("add data volume: %w", err)
+	}
+	if err := diskutil("apfs", "addVolume", container, "APFS", splitVaultName, "-passphrase", "macfor-it"); err != nil {
+		return "", fmt.Errorf("add encrypted volume: %w", err)
+	}
+
+	dataMount, err := volumeMountPoint(ctx, container, dataName)
+	if err != nil {
+		return "", err
+	}
+	vaultMount, err := volumeMountPoint(ctx, container, splitVaultName)
+	if err != nil {
+		return "", err
+	}
+
+	// System: SystemVersion.plist and an empty Users firmlink placeholder.
+	if err := runDitto(ctx, filepath.Join(f.tree, "System"), filepath.Join(systemMount, "System")); err != nil {
+		return "", err
+	}
+	if err := os.Mkdir(filepath.Join(systemMount, "Users"), 0o755); err != nil { //nolint:gosec // Test fixture directory.
+		return "", err
+	}
+	// Data: everything a 10.15+ Mac keeps on the Data volume.
+	for _, d := range []string{"Users", "Library", "private"} {
+		if err := runDitto(ctx, filepath.Join(f.tree, d), filepath.Join(dataMount, d)); err != nil {
+			return "", err
+		}
+	}
+	if err := diskutil("unmount", vaultMount); err != nil {
+		return "", fmt.Errorf("lock encrypted volume: %w", err)
+	}
+
+	if err := runHdiutil(ctx, "detach", top); err != nil {
+		return "", fmt.Errorf("detach sparse image: %w", err)
+	}
+	dmg := filepath.Join(dir, "split.dmg")
+	if err := runHdiutil(ctx, "convert", "-quiet", sparse, "-format", "UDRO", "-o", dmg); err != nil {
+		return "", fmt.Errorf("convert split image: %w", err)
+	}
+	return dmg, nil
+}
+
+// volumeMountPoint returns where the named volume of container is mounted.
+func volumeMountPoint(ctx context.Context, container, name string) (string, error) {
+	out, err := execRunner{}.Run(ctx, diskutilPath, "apfs", "list", "-plist", container)
+	if err != nil {
+		return "", err
+	}
+	var list struct {
+		Containers []struct {
+			Volumes []struct {
+				DeviceIdentifier string `plist:"DeviceIdentifier"`
+				Name             string `plist:"Name"`
+			} `plist:"Volumes"`
+		} `plist:"Containers"`
+	}
+	if _, err := plist.Unmarshal(out, &list); err != nil {
+		return "", fmt.Errorf("parse apfs list: %w", err)
+	}
+	for _, c := range list.Containers {
+		for _, v := range c.Volumes {
+			if v.Name != name {
+				continue
+			}
+			info, err := execRunner{}.Run(ctx, diskutilPath, "info", "-plist", v.DeviceIdentifier)
+			if err != nil {
+				return "", err
+			}
+			var vi struct {
+				MountPoint string `plist:"MountPoint"`
+			}
+			if _, err := plist.Unmarshal(info, &vi); err != nil {
+				return "", err
+			}
+			if vi.MountPoint == "" {
+				return "", fmt.Errorf("volume %s (%s) is not mounted", name, v.DeviceIdentifier)
+			}
+			return vi.MountPoint, nil
+		}
+	}
+	return "", fmt.Errorf("volume %s not found in %s", name, container)
+}
+
+// runDitto copies src to dst, preserving symlinks.
+func runDitto(ctx context.Context, src, dst string) error {
+	_, err := execRunner{}.Run(ctx, "/usr/bin/ditto", src, dst)
+	return err
+}
+
+// TestSplitVolumeImage collects from an image whose System and Data volumes
+// mount separately, as a 10.15+ Mac's do, with a third, encrypted volume that
+// stays locked.
+func TestSplitVolumeImage(t *testing.T) {
+	f := getFixtures(t)
+	if _, err := os.Stat(diskutilPath); err != nil {
+		t.Skipf("skipping: %s not available: %v", diskutilPath, err)
+	}
+
+	splitOnce.Do(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), itTestTimeout)
+		defer cancel()
+		splitImage, errSplit = buildSplitVolumeImage(ctx, f)
+	})
+	if errSplit != nil {
+		t.Fatalf("building split-volume image: %v", errSplit)
+	}
+
+	src := newImageSource(t, splitImage)
+
+	roots := src.Roots()
+	if len(roots) != 2 || !strings.HasSuffix(roots[0], " - Data") || roots[1] != src.MountPoint() {
+		t.Fatalf("Roots() = %v, want [Data volume, System volume %s]", roots, src.MountPoint())
+	}
+
+	// Identity from both volumes through the merged view.
+	if v, _ := src.OSVersion(); v != "14.2.1" {
+		t.Errorf("OSVersion() = %q, want 14.2.1 from the System volume", v)
+	}
+	users, err := src.Users()
+	if err != nil || len(users) != 1 || users[0].Username != "alice" {
+		t.Errorf("Users() = %+v, %v; want alice from the Data volume", users, err)
+	}
+	info, err := src.SystemInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Timezone != itTimezone {
+		t.Errorf("Timezone = %q, want %q from the Data volume", info.Timezone, itTimezone)
+	}
+	if info.HardwareModel != itHardwareModel {
+		t.Errorf("HardwareModel = %q, want %q from the Data volume", info.HardwareModel, itHardwareModel)
+	}
+	assertSourceReads(t, src)
+
+	// The locked volume is reported, not silently skipped.
+	warnings := src.Warnings()
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "did not mount") {
+		t.Errorf("Warnings() = %v, want one warning for the locked volume", warnings)
+	}
 }

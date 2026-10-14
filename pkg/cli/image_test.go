@@ -25,6 +25,7 @@ type fakeImageSource struct {
 
 	path     string
 	closeErr error
+	warnings []string
 
 	mu         sync.Mutex
 	closeCalls int
@@ -34,6 +35,7 @@ func (f *fakeImageSource) Type() macfor.SourceType { return macfor.SourceTypeIma
 func (f *fakeImageSource) ImagePath() string       { return f.path }
 func (f *fakeImageSource) Format() image.Format    { return image.FormatDMG }
 func (f *fakeImageSource) MountPoint() string      { return "/Volumes/fake-system" }
+func (f *fakeImageSource) Warnings() []string      { return f.warnings }
 func (f *fakeImageSource) Roots() []string {
 	return []string{"/Volumes/fake-data", "/Volumes/fake-system"}
 }
@@ -278,8 +280,29 @@ func TestRunCollect_ImageDryRun(t *testing.T) {
 	if !strings.Contains(output, want) {
 		t.Errorf("expected %q in output, got: %s", want, output)
 	}
+	if strings.Contains(output, "Warning:") {
+		t.Errorf("unexpected warning in output for a fully readable image: %s", output)
+	}
 	if got := fake.closes(); got != 1 {
 		t.Errorf("Close calls = %d, want 1 (dry run must still detach)", got)
+	}
+}
+
+func TestRunCollect_ImageDryRunShowsWarnings(t *testing.T) {
+	resetTestState()
+	resetCollectFlags()
+	cleanup := registerCollectTestPlugins()
+	defer cleanup()
+
+	fake := &fakeImageSource{warnings: []string{"volume /dev/disk5s1 on the image did not mount"}}
+	imagePath, _ := installFakeImageSource(t, fake, nil)
+
+	output, err := runCollectArgs(context.Background(), t, "--image", imagePath, "--dry-run")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if want := "Warning: volume /dev/disk5s1 on the image did not mount"; !strings.Contains(output, want) {
+		t.Errorf("expected %q in output, got: %s", want, output)
 	}
 }
 
@@ -289,7 +312,7 @@ func TestRunCollect_ImageCollection(t *testing.T) {
 	macfor.ClearRegistry()
 	defer macfor.ClearRegistry()
 
-	fake := &fakeImageSource{}
+	fake := &fakeImageSource{warnings: []string{"volume /dev/disk5s1 on the image did not mount"}}
 	imagePath, _ := installFakeImageSource(t, fake, nil)
 
 	collected := false
@@ -365,6 +388,22 @@ func TestRunCollect_ImageCollection(t *testing.T) {
 	}
 	if roots, ok := att.Details["roots"].([]any); !ok || len(roots) != 2 {
 		t.Errorf("image_attached roots = %v, want 2 roots", att.Details["roots"])
+	}
+	if att.Details["read_only"] != true {
+		t.Errorf("image_attached read_only = %v, want true", att.Details["read_only"])
+	}
+	info, err := os.Stat(imagePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if size, ok := att.Details["image_size_bytes"].(float64); !ok || int64(size) != info.Size() {
+		t.Errorf("image_attached image_size_bytes = %v, want %d", att.Details["image_size_bytes"], info.Size())
+	}
+	if _, ok := att.Details["image_modified"].(string); !ok {
+		t.Errorf("image_attached image_modified = %v, want a timestamp", att.Details["image_modified"])
+	}
+	if w, ok := att.Details["warnings"].([]any); !ok || len(w) != 1 {
+		t.Errorf("image_attached warnings = %v, want the source's one warning", att.Details["warnings"])
 	}
 	if att.Timestamp.After(custody.Entries[detached].Timestamp) {
 		t.Error("image_attached timestamp is after image_detached")
@@ -455,10 +494,23 @@ func TestRunCollect_ImageClosedOnCancel(t *testing.T) {
 	})
 
 	outputPath := filepath.Join(t.TempDir(), "evidence.zip")
-	_, _ = runCollectArgs(ctx, t, "--image", imagePath, "--output", outputPath)
+	_, err := runCollectArgs(ctx, t, "--image", imagePath, "--output", outputPath)
+	if ctx.Err() == nil {
+		t.Fatal("plugin never ran, so cancellation was not exercised")
+	}
+	t.Logf("runCollect after cancellation: %v", err)
 
 	if got := fake.closes(); got != 1 {
 		t.Errorf("Close calls = %d, want 1 after cancellation", got)
+	}
+
+	// The cancelled run still finalizes the container, and the detach made
+	// before finalize must be in its custody log.
+	var custody container.ChainOfCustodyLog
+	readContainerJSON(t, outputPath, "chain-of-custody.json", &custody)
+	actions := custodyActions(custody)
+	if indexOf(actions, container.CustodyActionImageDetached) < 0 {
+		t.Errorf("cancelled run did not record image_detached: %v", actions)
 	}
 }
 

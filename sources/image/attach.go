@@ -48,6 +48,16 @@ var dataVolumeMarkers = []string{"Users", "private/var"}
 // container disk (the APFS container partition type GUID).
 const apfsContainerHint = "EF57347C-0000-11AA-AA11-00306543ECAC"
 
+// volumeHints are the content hints hdiutil reports for filesystem volumes:
+// the APFS volume type GUID and the HFS+/HFSX partition types. A volume entity
+// without a mount-point is a volume that did not mount, typically because it is
+// encrypted (a FileVault-protected Data volume) or damaged.
+var volumeHints = map[string]bool{
+	"41504653-0000-11AA-AA11-00306543ECAC": true,
+	"Apple_HFS":                            true,
+	"Apple_HFSX":                           true,
+}
+
 // wholeDiskPattern matches a top-level disk dev-entry such as /dev/disk4, as
 // opposed to a slice such as /dev/disk4s1.
 var wholeDiskPattern = regexp.MustCompile(`^/dev/disk[0-9]+$`)
@@ -163,6 +173,10 @@ type attachment struct {
 	// volume group, or empty for a single-volume image.
 	data string
 
+	// unmounted lists the dev-entries of volumes hdiutil attached but did not
+	// mount, whose contents are therefore not collected.
+	unmounted []string
+
 	// ewf is the ewfmount that exposed the attached raw device for an E01
 	// image, released after the hdiutil detach; nil for DMG and raw images.
 	ewf *ewfMount
@@ -178,13 +192,16 @@ func newAttachment(runner commandRunner, entities []hdiutilEntity) *attachment {
 
 	var mounts []string
 	for _, e := range entities {
-		if e.MountPoint != "" {
+		switch {
+		case e.MountPoint != "":
 			mounts = append(mounts, e.MountPoint)
+		case volumeHints[e.ContentHint]:
+			a.unmounted = append(a.unmounted, e.DevEntry)
 		}
 	}
 
 	for _, mp := range mounts {
-		if exists(filepath.Join(mp, systemVersionPlist)) {
+		if existsIn(mp, systemVersionPlist) {
 			a.system = mp
 			break
 		}
@@ -211,17 +228,23 @@ func newAttachment(runner commandRunner, entities []hdiutilEntity) *attachment {
 // volume of an APFS volume group.
 func isDataVolume(mp string) bool {
 	for _, marker := range dataVolumeMarkers {
-		if exists(filepath.Join(mp, marker)) {
+		if existsIn(mp, marker) {
 			return true
 		}
 	}
 	return false
 }
 
-// exists reports whether path exists, without following a final symlink out of
-// the image.
-func exists(path string) bool {
-	_, err := os.Lstat(path)
+// existsIn reports whether rel exists on the volume mounted at mp. It resolves
+// through os.Root, so a symlink on the image can never make a path on the
+// collecting machine count as present.
+func existsIn(mp, rel string) bool {
+	r, err := os.OpenRoot(mp)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = r.Close() }()
+	_, err = r.Lstat(rel)
 	return err == nil
 }
 

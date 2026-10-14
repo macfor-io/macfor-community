@@ -48,10 +48,10 @@ func newEWFHarness(t *testing.T) *ewfHarness {
 	h := &ewfHarness{t: t, attachOut: loadFixture(t, singleFixture, volumes)}
 	h.runner = &fakeRunner{respond: h.respond}
 	h.tools = ewfTools{
-		runner:    h.runner,
-		lookPath:  func(string) (string, error) { return fakeEWFMountPath, nil },
-		removeAll: h.removeAll,
-		tempDir:   t.TempDir(),
+		runner:   h.runner,
+		lookPath: func(string) (string, error) { return fakeEWFMountPath, nil },
+		remove:   h.removeAll,
+		tempDir:  t.TempDir(),
 	}
 	return h
 }

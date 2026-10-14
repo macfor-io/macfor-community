@@ -76,6 +76,27 @@ func TestDetectFormat(t *testing.T) {
 			want: FormatRaw,
 		},
 		{
+			name: "read-write DMG holds a GPT disk but is still a DMG",
+			file: "evidence.dmg",
+			content: func() []byte {
+				buf := make([]byte, headerSize+udifTrailerSize)
+				copy(buf[gptOffset512:], gptMagic)
+				copy(buf[len(buf)-udifTrailerSize:], kolyMagic)
+				return buf
+			}(),
+			want: FormatDMG,
+		},
+		{
+			name: "raw GPT disk shorter than the 4K header",
+			file: "tiny.dd",
+			content: func() []byte {
+				buf := make([]byte, minImageSize+16)
+				copy(buf[gptOffset512:], gptMagic)
+				return buf
+			}(),
+			want: FormatRaw,
+		},
+		{
 			name:    "E01 with misleading extension",
 			file:    "evidence.dd",
 			content: padTo(ewfMagic, minImageSize),

@@ -197,6 +197,9 @@ func runCollect(cmd *cobra.Command, _ []string) error {
 	if collectFrom == "" && collectImage == "" {
 		warnIfNoFullDiskAccess(cmd)
 	}
+	for _, w := range handle.warnings() {
+		logger.Warn().Str("image", collectImage).Msg(w)
+	}
 
 	// Run detection first to check if we have applicable plugins.
 	detectionResult, err := runDetectionPhase(ctx, src)
@@ -319,7 +322,7 @@ func handleDetectionResult(cmd *cobra.Command, result *orchestrator.Result, hand
 	}
 
 	if collectDryRun {
-		return true, outputDryRunResultsFromOrchestrator(cmd, result, handle.describe(collectFrom))
+		return true, outputDryRunResultsFromOrchestrator(cmd, result, handle.describe(collectFrom), handle.warnings())
 	}
 
 	if result.ApplicablePlugins() == 0 {
@@ -480,14 +483,18 @@ func convertOrchestratorResult(result *orchestrator.Result, containerPath string
 
 // outputDryRunResultsFromOrchestrator outputs dry run results from orchestrator result.
 // sourceDesc names a non-live source, e.g. "image (/path/x.dmg, dmg)"; it is
-// empty for the live system, which prints no source line.
-func outputDryRunResultsFromOrchestrator(cmd *cobra.Command, result *orchestrator.Result, sourceDesc string) error {
+// empty for the live system, which prints no source line. warnings are printed
+// beneath it.
+func outputDryRunResultsFromOrchestrator(cmd *cobra.Command, result *orchestrator.Result, sourceDesc string, warnings []string) error {
 	if collectJSON {
 		return outputCollectResultJSON(cmd, convertOrchestratorResult(result, ""))
 	}
 
 	if sourceDesc != "" {
 		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Source: %s\n", sourceDesc)
+	}
+	for _, w := range warnings {
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Warning: %s\n", w)
 	}
 
 	// Table output for dry run.

@@ -357,9 +357,6 @@ type CollectionMeta struct {
 	// ImagePath is the disk image path for image sources (optional).
 	ImagePath string
 
-	// ImageFormat is the disk image format for image sources (optional).
-	ImageFormat string
-
 	// SystemInfo is the full system information, if available.
 	// When set, it populates both legacy and nested fields in the manifest.
 	SystemInfo *macfor.SystemInfo

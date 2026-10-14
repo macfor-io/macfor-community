@@ -185,11 +185,7 @@ func (s *Source) timezone() string {
 // collecting host's file rather than the tree's. It returns "" when the link is
 // absent, not a symlink, or does not name a plausible zone.
 func (s *Source) timezoneFromLocaltime() string {
-	resolved, err := s.resolve(localtimePath)
-	if err != nil {
-		return ""
-	}
-	target, err := os.Readlink(resolved)
+	target, err := s.Readlink(localtimePath)
 	if err != nil {
 		return ""
 	}

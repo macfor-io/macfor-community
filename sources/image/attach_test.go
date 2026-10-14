@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -346,7 +347,7 @@ func TestAttachWith(t *testing.T) {
 		}
 	})
 
-	t.Run("hdiutil failure carries stderr", func(t *testing.T) {
+	t.Run("hdiutil failure is passed through", func(t *testing.T) {
 		r := &fakeRunner{respond: func(context.Context, int, []string) ([]byte, error) {
 			return nil, errors.New("hdiutil attach: exit status 1: hdiutil: attach failed - image not recognized")
 		}}
@@ -391,11 +392,14 @@ func TestAttachWith(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
-		var detachCtxErr error
+		var detachCtxErr, attachCtxErr error
 		r := &fakeRunner{respond: func(c context.Context, n int, _ []string) ([]byte, error) {
 			if n == 0 {
-				// The attach completes, then the caller gives up.
+				// The caller gives up while hdiutil attach is running. The attach
+				// must not be killed: a killed hdiutil leaves the image attached
+				// with no device recorded to detach.
 				cancel()
+				attachCtxErr = c.Err()
 				return out, nil
 			}
 			detachCtxErr = c.Err()
@@ -408,6 +412,9 @@ func TestAttachWith(t *testing.T) {
 		}
 		if got := r.commands(); len(got) != 2 || got[1] != "hdiutil detach /dev/disk4" {
 			t.Errorf("commands = %q", got)
+		}
+		if attachCtxErr != nil {
+			t.Errorf("hdiutil attach was cancelled with the caller's context: %v", attachCtxErr)
 		}
 		if detachCtxErr != nil {
 			t.Errorf("cleanup detach ran on a done context: %v", detachCtxErr)
@@ -514,5 +521,32 @@ func TestExecRunnerIncludesStderr(t *testing.T) {
 	out, err = execRunner{}.Run(context.Background(), "/bin/sh", "-c", "echo ok")
 	if err != nil || strings.TrimSpace(string(out)) != "ok" {
 		t.Errorf("Run = %q, %v", out, err)
+	}
+}
+
+// TestNewAttachmentSplitLockedReal classifies a captured hdiutil attach of an
+// APFS container with separate System and Data volumes and a locked encrypted
+// volume. The output lists the APFS slice first and the locked volume with no
+// mount-point.
+func TestNewAttachmentSplitLockedReal(t *testing.T) {
+	root := t.TempDir()
+	mkTree(t, filepath.Join(root, "VGSys"), systemVersionPlist, "Users/")
+	mkTree(t, filepath.Join(root, "VGSys - Data"), "Users/alice/", "private/var/")
+
+	entities, err := parseAttachPlist(loadFixture(t, "hdiutil_attach_split_locked_real.plist", root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := newAttachment(&fakeRunner{}, entities)
+
+	want := []string{filepath.Join(root, "VGSys - Data"), filepath.Join(root, "VGSys")}
+	if got := a.roots(); !slices.Equal(got, want) {
+		t.Errorf("roots() = %v, want %v", got, want)
+	}
+	if a.devNode != "/dev/disk4" {
+		t.Errorf("devNode = %q, want /dev/disk4", a.devNode)
+	}
+	if !slices.Equal(a.unmounted, []string{"/dev/disk5s2"}) {
+		t.Errorf("unmounted = %v, want the locked volume /dev/disk5s2", a.unmounted)
 	}
 }

@@ -44,6 +44,9 @@ type imageSource interface {
 
 	// Roots returns the mount points the source reads from.
 	Roots() []string
+
+	// Warnings describes content of the image that collection cannot reach.
+	Warnings() []string
 }
 
 // newImageSource attaches the disk image at path read-only and returns a
@@ -119,6 +122,14 @@ func (h *sourceHandle) Close() error {
 	return nil
 }
 
+// warnings returns what an image source reports it cannot reach, or nil.
+func (h *sourceHandle) warnings() []string {
+	if img, ok := h.src.(imageSource); ok {
+		return img.Warnings()
+	}
+	return nil
+}
+
 // describe returns how the dry-run output names the source, or "" for the
 // live system.
 func (h *sourceHandle) describe(fromPath string) string {
@@ -149,18 +160,29 @@ func (h *sourceHandle) custodyHooks() (onStart, beforeFinalize func(*container.C
 	imagePath := img.ImagePath()
 
 	onStart = func(c *container.Container) {
+		details := map[string]any{
+			custodyKeyImagePath: imagePath,
+			"image_format":      string(img.Format()),
+			"mount_point":       img.MountPoint(),
+			"roots":             img.Roots(),
+			"read_only":         true,
+		}
+		// The image file's size and modification time tie the collection to
+		// the exact copy that was attached, without hashing an image that may
+		// be hundreds of gigabytes.
+		if info, err := os.Stat(imagePath); err == nil {
+			details["image_size_bytes"] = info.Size()
+			details["image_modified"] = info.ModTime().UTC()
+		}
+		if warnings := img.Warnings(); len(warnings) > 0 {
+			details["warnings"] = warnings
+		}
 		c.AddCustodyEntry(container.ChainOfCustodyEntry{
 			Timestamp: h.openedAt,
 			Action:    container.CustodyActionImageAttached,
 			Actor:     custodyActor,
 			Target:    imagePath,
-			Details: map[string]any{
-				custodyKeyImagePath: imagePath,
-				"image_format":      string(img.Format()),
-				"mount_point":       img.MountPoint(),
-				"roots":             img.Roots(),
-				"read_only":         true,
-			},
+			Details:   details,
 		})
 	}
 

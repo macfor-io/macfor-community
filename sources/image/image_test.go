@@ -482,10 +482,10 @@ func TestCloseReleasesEWFMount(t *testing.T) {
 			system:  system,
 			data:    data,
 			ewf: &ewfMount{
-				runner:    r,
-				removeAll: func(p string) error { removed = append(removed, p); return nil },
-				dir:       ewfDir,
-				mounted:   true,
+				runner:  r,
+				remove:  func(p string) error { removed = append(removed, p); return nil },
+				dir:     ewfDir,
+				mounted: true,
 			},
 		}, nil
 	}
@@ -586,6 +586,65 @@ func TestNewPropagatesErrors(t *testing.T) {
 		_, err := newWith(context.Background(), writeRawImage(t), attacher)
 		if !errors.Is(err, ErrNoMountedVolume) {
 			t.Errorf("err = %v, want ErrNoMountedVolume", err)
+		}
+	})
+}
+
+// TestWarnings checks a collection that cannot reach the user data says so,
+// rather than looking like a Mac with nothing on it.
+func TestWarnings(t *testing.T) {
+	t.Run("split volume group reads everything", func(t *testing.T) {
+		data, system := splitTree(t)
+		src, _ := newFakeSource(t, data, system)
+		if w := src.Warnings(); len(w) != 0 {
+			t.Errorf("Warnings() = %v, want none", w)
+		}
+	})
+
+	t.Run("single volume with homes", func(t *testing.T) {
+		src, _ := newFakeSource(t, "", macostree.MustBuild(t, macostree.Defaults()))
+		if w := src.Warnings(); len(w) != 0 {
+			t.Errorf("Warnings() = %v, want none for a volume that holds the user data", w)
+		}
+	})
+
+	t.Run("10.15+ System volume without its Data volume", func(t *testing.T) {
+		_, system := splitTree(t)
+		src, _ := newFakeSource(t, "", system)
+		w := src.Warnings()
+		if len(w) != 1 || !strings.Contains(w[0], "separate Data volume") {
+			t.Errorf("Warnings() = %v, want the missing Data volume warning", w)
+		}
+	})
+
+	t.Run("pre-10.15 single volume without homes", func(t *testing.T) {
+		opts := macostree.Defaults()
+		opts.OSVersion = "10.14.6"
+		opts.Users = nil
+		src, _ := newFakeSource(t, "", macostree.MustBuild(t, opts))
+		if w := src.Warnings(); len(w) != 0 {
+			t.Errorf("Warnings() = %v, want none before the System/Data split", w)
+		}
+	})
+
+	t.Run("volume that did not mount", func(t *testing.T) {
+		data, system := splitTree(t)
+		fa := &fakeAttacher{runner: &fakeRunner{}, data: data, system: system}
+		attachFn := func(ctx context.Context, path string, format Format) (*attachment, error) {
+			a, err := fa.attach(ctx, path, format)
+			if a != nil {
+				a.unmounted = []string{"/dev/disk5s2"}
+			}
+			return a, err
+		}
+		src, err := newWith(context.Background(), writeRawImage(t), attachFn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = src.Close() })
+		w := src.Warnings()
+		if len(w) != 1 || !strings.Contains(w[0], "/dev/disk5s2") {
+			t.Errorf("Warnings() = %v, want one for /dev/disk5s2", w)
 		}
 	})
 }

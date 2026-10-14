@@ -12,7 +12,7 @@ import (
 // It scans the (merged) Users/ directory for home directories and supplements
 // each entry with metadata from dslocal node plists when available.
 func (s *Source) Users() ([]macfor.User, error) {
-	usersPath, err := s.resolve("Users")
+	usersPath, err := joinRoot(s.root, "Users")
 	if err != nil {
 		return nil, err
 	}
