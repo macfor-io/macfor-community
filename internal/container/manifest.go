@@ -67,6 +67,21 @@ type SourceInfo struct {
 	Network       *NetworkInfo       `json:"network,omitempty"`
 	Temporal      *TemporalInfo      `json:"temporal,omitempty"`
 	CollectionEnv *CollectionEnvInfo `json:"collection_env,omitempty"`
+
+	// Users lists the user accounts the source enumerated — the accounts whose
+	// home directories plugins collected from. It is null when enumeration
+	// failed and empty when the source has no user accounts.
+	Users []UserAccountInfo `json:"users"`
+}
+
+// UserAccountInfo describes one user account enumerated from the source.
+type UserAccountInfo struct {
+	Username string `json:"username"`
+	UID      int    `json:"uid"`
+	GID      int    `json:"gid"`
+	Name     string `json:"name,omitempty"`
+	HomeDir  string `json:"home_dir,omitempty"`
+	Shell    string `json:"shell,omitempty"`
 }
 
 // OSInfo contains operating system details.

@@ -1,0 +1,41 @@
+# User Accounts Plugin Manifest
+# This manifest defines all artifacts collected by the system.users plugin.
+#
+# The local directory node stores one property list per account. Besides the
+# account metadata parsed here, each file holds credential material
+# (ShadowHashData, KerberosKeys, HeimdalSRPKey) and the password hint. The
+# plugin is metadata-only: it reads an allowlist of keys, never copies the raw
+# file into the evidence container, and records the file's SHA-256 instead.
+
+schema_version: "1.0"
+
+plugin:
+  id: system.users
+  name: User Accounts
+  description: Enumerates local user accounts from the directory services node, recording account metadata without password hashes or keys
+  version: "1.0.0"
+  categories:
+    - system
+    - user
+    - accounts
+  platforms:
+    - os: darwin
+      min_version: "10.12"
+
+artifacts:
+  # ============================================================
+  # Local Accounts
+  # One property list per account, readable only by root
+  # ============================================================
+  - id: local_accounts
+    name: Local User Accounts
+    category: config
+    format: binary_plist
+    parser: users.dslocal
+    requires_root: true
+    paths:
+      - pattern: "/private/var/db/dslocal/nodes/Default/users/*.plist"
+        type: glob
+    metadata:
+      raw_file_collected: "false"
+      excluded_keys: "ShadowHashData, KerberosKeys, HeimdalSRPKey, hint, passwd, jpegphoto"

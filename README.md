@@ -117,6 +117,7 @@ sudo ./macfor collect --output ./evidence.zip
 |--------|-------------|-----------|
 | `shell.history` | Shell command history | bash, zsh, fish, sh |
 | `browser.safari` | Safari browser state | History, Downloads, Bookmarks, Cookies, Local Storage, Extensions, Session state |
+| `system.users` | Local user accounts (metadata only, requires root on a live system) | Every account in the local directory node: names, UID/GID, GUID, home, shell, hidden/service flags, Secure Token, creation, password-change and failed-login times. Password hashes, Kerberos keys and the password hint are never collected. |
 
 > **Need more coverage?** [macfor Pro](https://macfor.io/pricing) adds 30+
 > collectors on the same framework, including Chrome, Firefox, Messages,
@@ -166,7 +167,8 @@ macfor-community/
 │   └── directory/           Directory/disk-image source
 └── plugins/
     ├── shell/               shell.history
-    └── safari/              browser.safari
+    ├── safari/              browser.safari
+    └── users/               system.users
 ```
 
 ## Development

@@ -119,7 +119,7 @@ func TestE2E_ParquetCollection(t *testing.T) {
 	if manifest["record_format"] != "parquet" {
 		t.Errorf("manifest record_format = %v, want parquet", manifest["record_format"])
 	}
-	if manifest["version"] != "1.3" {
+	if manifest["version"] != "1.4" {
 		t.Errorf("manifest version = %v, want 1.2", manifest["version"])
 	}
 

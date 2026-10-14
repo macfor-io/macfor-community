@@ -194,6 +194,52 @@ func TestParquetRecordWriter_CommonFields(t *testing.T) {
 	}
 }
 
+// envelopeNamedRecord has fields whose Go names match the common fields the
+// writer prepends to every record.
+type envelopeNamedRecord struct {
+	ArtifactType string    `json:"artifact_type"`
+	PluginID     string    `json:"plugin_id"`
+	Username     string    `json:"username"`
+	CollectedAt  time.Time `json:"collected_at"`
+}
+
+// TestParquetRecordWriter_EnvelopeNamedFields guards against a reflect.StructOf
+// duplicate-field panic when a plugin record has a field named like one of the
+// common fields (e.g. Username), and checks both values are kept.
+func TestParquetRecordWriter_EnvelopeNamedFields(t *testing.T) {
+	w := newParquetRecordWriter("system.users", "snappy")
+	a, _ := macfor.NewArtifact("system.users", "system", "user_accounts")
+	a.Username = "envelope_user"
+
+	rec := envelopeNamedRecord{ArtifactType: "rec_type", PluginID: "rec_plugin", Username: "alice"}
+	if err := w.WriteRecord(*a, rec); err != nil {
+		t.Fatalf("WriteRecord() error = %v", err)
+	}
+
+	data, err := w.encodeParquet(w.writers["user_accounts"])
+	if err != nil {
+		t.Fatalf("encodeParquet() error = %v", err)
+	}
+
+	type decodedRecord struct {
+		EnvUsername string `parquet:"_username"`
+		Username    string `parquet:"Username"`
+	}
+	reader := goparquet.NewGenericReader[decodedRecord](bytes.NewReader(data))
+	defer func() { _ = reader.Close() }()
+
+	decoded := make([]decodedRecord, 1)
+	if n, err := reader.Read(decoded); n != 1 || (err != nil && !errors.Is(err, io.EOF)) {
+		t.Fatalf("Read() n = %d, err = %v", n, err)
+	}
+	if decoded[0].EnvUsername != "envelope_user" {
+		t.Errorf("_username = %q, want envelope_user", decoded[0].EnvUsername)
+	}
+	if decoded[0].Username != "alice" {
+		t.Errorf("Username = %q, want alice", decoded[0].Username)
+	}
+}
+
 func TestParquetRecordWriter_MultipleArtifactTypes(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "test.zip")

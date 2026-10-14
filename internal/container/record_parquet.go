@@ -225,27 +225,38 @@ func (w *parquetRecordWriter) encodeParquet(buf *artifactParquetBuffer) ([]byte,
 	return output.Bytes(), nil
 }
 
+// Go field names of the common fields prepended to every plugin record. The
+// column names come from the fields' parquet tags; these names only have to be
+// unique within the merged struct, so they are prefixed to stay clear of
+// plugin record fields such as Username.
+const (
+	mergedFieldArtifactType = "MacforEnvelopeArtifactType"
+	mergedFieldPluginID     = "MacforEnvelopePluginID"
+	mergedFieldUsername     = "MacforEnvelopeUsername"
+	mergedFieldCollectedAt  = "MacforEnvelopeCollectedAt"
+)
+
 // buildMergedType creates a runtime struct type that prepends common fields
 // to the plugin record type.
 func buildMergedType(pluginType reflect.Type) reflect.Type {
 	commonFields := []reflect.StructField{
 		{
-			Name: "ArtifactType",
+			Name: mergedFieldArtifactType,
 			Type: reflect.TypeOf(""),
 			Tag:  `parquet:"_artifact_type"`,
 		},
 		{
-			Name: "PluginID",
+			Name: mergedFieldPluginID,
 			Type: reflect.TypeOf(""),
 			Tag:  `parquet:"_plugin_id"`,
 		},
 		{
-			Name: "Username",
+			Name: mergedFieldUsername,
 			Type: reflect.TypeOf(""),
 			Tag:  `parquet:"_username"`,
 		},
 		{
-			Name: "CollectedAt",
+			Name: mergedFieldCollectedAt,
 			Type: reflect.TypeOf(time.Time{}),
 			Tag:  `parquet:"_collected_at,timestamp(microsecond)"`,
 		},
@@ -268,10 +279,10 @@ func (w *parquetRecordWriter) buildMergedValue(mergedType reflect.Type, br parqu
 	merged := reflect.New(mergedType).Elem()
 
 	// Set common fields.
-	merged.FieldByName("ArtifactType").SetString(buf.artifactType)
-	merged.FieldByName("PluginID").SetString(w.pluginID)
-	merged.FieldByName("Username").SetString(br.username)
-	merged.FieldByName("CollectedAt").Set(reflect.ValueOf(time.Now().UTC()))
+	merged.FieldByName(mergedFieldArtifactType).SetString(buf.artifactType)
+	merged.FieldByName(mergedFieldPluginID).SetString(w.pluginID)
+	merged.FieldByName(mergedFieldUsername).SetString(br.username)
+	merged.FieldByName(mergedFieldCollectedAt).Set(reflect.ValueOf(time.Now().UTC()))
 
 	// Copy plugin record fields.
 	rv := reflect.ValueOf(br.record)

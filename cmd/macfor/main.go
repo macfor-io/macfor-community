@@ -9,6 +9,7 @@ import (
 	// Import plugins to register them via init().
 	_ "github.com/macfor-io/macfor-community/plugins/safari"
 	_ "github.com/macfor-io/macfor-community/plugins/shell"
+	_ "github.com/macfor-io/macfor-community/plugins/users"
 
 	// Import schemas to register Parquet schema entries via init().
 	_ "github.com/macfor-io/macfor-community/internal/schemas"

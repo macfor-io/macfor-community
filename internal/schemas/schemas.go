@@ -8,6 +8,7 @@ import (
 	macforparquet "github.com/macfor-io/macfor-community/pkg/macfor/parquet"
 	"github.com/macfor-io/macfor-community/plugins/safari"
 	"github.com/macfor-io/macfor-community/plugins/shell"
+	"github.com/macfor-io/macfor-community/plugins/users"
 )
 
 //nolint:gochecknoinits // Schema registration requires init.
@@ -30,6 +31,9 @@ func init() {
 	register(r, "browser.safari", "local_storage", reflect.TypeOf(safari.LocalStorageRecord{}))
 	register(r, "browser.safari", "session_windows", reflect.TypeOf(safari.SessionWindowRecord{}))
 	register(r, "browser.safari", "session_tabs", reflect.TypeOf(safari.SessionTabRecord{}))
+
+	// User account schemas.
+	register(r, "system.users", "user_accounts", reflect.TypeOf(users.AccountRecord{}))
 }
 
 // register is a helper that computes the checksum and registers a v1.0 schema entry.

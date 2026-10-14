@@ -427,7 +427,7 @@ func (o *Orchestrator) runCollection(ctx context.Context, plugins []macfor.Plugi
 	results := make(map[string]container.PluginSummary)
 
 	if users, err := o.config.Source.Users(); err == nil {
-		o.config.Container.SetUsersProcessed(len(users))
+		o.config.Container.SetUsers(users)
 	}
 
 	o.reportProgress(Progress{

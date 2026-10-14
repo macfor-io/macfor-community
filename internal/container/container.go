@@ -30,7 +30,7 @@ const (
 	custodyKeyPlugin = "plugin"
 
 	// containerFormatVersion is the evidence-container format version.
-	containerFormatVersion = "1.3"
+	containerFormatVersion = "1.4"
 )
 
 // Config holds configuration for creating an evidence container.
@@ -89,8 +89,9 @@ type Container struct {
 	// collectionStartedAt is when the collection began.
 	collectionStartedAt time.Time
 
-	// usersProcessed is the number of user accounts collection covered.
-	usersProcessed int
+	// users holds the user accounts the source enumerated (nil until
+	// SetUsers is called).
+	users []UserAccountInfo
 }
 
 // NewContainer creates a new evidence container using the provided configuration.
@@ -342,12 +343,25 @@ func (c *Container) addCustodyEntryLocked(entry ChainOfCustodyEntry) {
 	c.custodyLog.Entries = append(c.custodyLog.Entries, entry)
 }
 
-// SetUsersProcessed records the number of user accounts the collection
-// covered, reported as users_processed in the manifest statistics.
-func (c *Container) SetUsersProcessed(n int) {
+// SetUsers records the user accounts the collection covered. They are written
+// to the manifest as source.users, and their count as users_processed in the
+// manifest statistics.
+func (c *Container) SetUsers(users []macfor.User) {
+	infos := make([]UserAccountInfo, len(users))
+	for i, u := range users {
+		infos[i] = UserAccountInfo{
+			Username: u.Username,
+			UID:      u.UID,
+			GID:      u.GID,
+			Name:     u.Name,
+			HomeDir:  u.HomeDir,
+			Shell:    u.Shell,
+		}
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.usersProcessed = n
+	c.users = infos
 }
 
 // AddPluginSummary adds a plugin execution summary to the manifest.
@@ -409,7 +423,8 @@ func (c *Container) Finalize() error {
 		}
 	}
 	c.manifest.CompletedAt = now
-	c.manifest.Statistics.UsersProcessed = c.usersProcessed
+	c.manifest.Source.Users = c.users
+	c.manifest.Statistics.UsersProcessed = len(c.users)
 
 	// Ensure custody log exists
 	if c.custodyLog == nil {

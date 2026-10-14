@@ -1172,7 +1172,11 @@ func TestCollectionStatistics(t *testing.T) {
 		t.Fatalf("NewContainer() error = %v", err)
 	}
 	c.SetCollectionMetadata(CollectionMeta{ToolVersion: "1.0.0", SourceType: "live"})
-	c.SetUsersProcessed(3)
+	c.SetUsers([]macfor.User{
+		{Username: "alice", UID: 501, GID: 20, Name: "Alice Smith", HomeDir: "/Users/alice", Shell: "/bin/zsh"},
+		{Username: "bob", UID: 502, GID: 20},
+		{Username: "carol", UID: 503, GID: 20},
+	})
 
 	coll := NewCollector(c, "shell.history")
 	for _, content := range []string{"12345", "1234567890"} {
@@ -1206,5 +1210,37 @@ func TestCollectionStatistics(t *testing.T) {
 	}
 	if m.Statistics.UsersProcessed != 3 {
 		t.Errorf("users_processed = %d, want 3", m.Statistics.UsersProcessed)
+	}
+	if len(m.Source.Users) != 3 {
+		t.Fatalf("source.users has %d entries, want 3", len(m.Source.Users))
+	}
+	want := UserAccountInfo{Username: "alice", UID: 501, GID: 20, Name: "Alice Smith", HomeDir: "/Users/alice", Shell: "/bin/zsh"}
+	if m.Source.Users[0] != want {
+		t.Errorf("source.users[0] = %+v, want %+v", m.Source.Users[0], want)
+	}
+}
+
+func TestManifestUsersNullWhenNotEnumerated(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.zip")
+	c, err := NewContainer(Config{OutputPath: path})
+	if err != nil {
+		t.Fatalf("NewContainer() error = %v", err)
+	}
+	c.SetCollectionMetadata(CollectionMeta{ToolVersion: "1.0.0", SourceType: "live"})
+	if err := c.Finalize(); err != nil {
+		t.Fatalf("Finalize() error = %v", err)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	var raw struct {
+		Source map[string]json.RawMessage `json:"source"`
+	}
+	if err := json.Unmarshal([]byte(readFromZip(t, path, "manifest.json")), &raw); err != nil {
+		t.Fatalf("unmarshal manifest: %v", err)
+	}
+	if got := string(raw.Source["users"]); got != "null" {
+		t.Errorf("source.users = %s, want null when users were never enumerated", got)
 	}
 }
