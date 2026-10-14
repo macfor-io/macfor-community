@@ -51,7 +51,10 @@ homebrew_casks:
       owner: macfor-io
       name: homebrew-tap
       branch: main
-      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+      # Pushed over SSH with a write deploy key scoped to the tap.
+      git:
+        url: git@github.com:macfor-io/homebrew-tap.git
+        private_key: "{{ .Env.HOMEBREW_TAP_DEPLOY_KEY }}"
     commit_author:
       name: Macfor
       email: macforio@proton.me
