@@ -182,8 +182,8 @@ func TestSystemInfo_Architecture(t *testing.T) {
 		{"Apple silicon M2", "Mac14,2", "arm64"},
 		{"Apple silicon M1 Max", "MacBookPro18,2", "arm64"},
 		{"Apple silicon M4 Pro", "Mac16,7", "arm64"},
-		{"Intel", "MacBookPro16,1", "x86_64"},
-		{"Intel 2012", "MacBookPro9,2", "x86_64"},
+		{"Intel", "MacBookPro16,1", "amd64"},
+		{"Intel 2012", "MacBookPro9,2", "amd64"},
 		{"unknown model", "MacFuture99,1", unknownValue},
 		{"absent platform plist", "", unknownValue},
 	}

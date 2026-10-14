@@ -6,13 +6,14 @@ import (
 	"github.com/macfor-io/macfor-community/internal/sysinfo"
 )
 
-// CPU architecture names reported by HardwareArchitecture. They follow the
-// Mach-O / uname naming used on macOS rather than Go's GOARCH names.
+// CPU architecture names reported by HardwareArchitecture. They use Go's
+// GOARCH names, matching what the live source reports via runtime.GOARCH.
 const (
 	// ArchARM64 is the architecture of Apple silicon Macs.
 	ArchARM64 = "arm64"
-	// ArchX86_64 is the architecture of Intel Macs.
-	ArchX86_64 = "x86_64"
+	// ArchAMD64 is the architecture of Intel Macs. It uses Go's name, as the
+	// live source reports runtime.GOARCH, so every source type agrees.
+	ArchAMD64 = "amd64"
 )
 
 // appleSiliconChip matches an Apple silicon chip token in a marketing model
@@ -41,7 +42,7 @@ func LookupHardwareModelName(model string) (string, bool) {
 // HardwareArchitecture derives the CPU architecture of a Mac from its hardware
 // model identifier (e.g., "Mac14,2"). It returns ArchARM64 when the model's
 // marketing name names an Apple silicon chip (M1, M2 Pro, M4 Max, ...),
-// ArchX86_64 for any other model present in the hardware model database, and
+// ArchAMD64 for any other model present in the hardware model database, and
 // an empty string when the model is empty or unknown. Unknown models are never
 // guessed, since a future identifier could be either architecture.
 func HardwareArchitecture(model string) string {
@@ -52,5 +53,5 @@ func HardwareArchitecture(model string) string {
 	if appleSiliconChip.MatchString(name) {
 		return ArchARM64
 	}
-	return ArchX86_64
+	return ArchAMD64
 }
