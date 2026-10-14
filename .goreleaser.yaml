@@ -44,8 +44,8 @@ homebrew_casks:
   - name: macfor
     ids: [macfor]
     binaries: [macfor]
-    homepage: https://macfor.io
-    description: macOS forensic artifact collector
+    homepage: https://macfor.io/
+    description: Forensic artifact collector
     directory: Casks
     repository:
       owner: macfor-io
