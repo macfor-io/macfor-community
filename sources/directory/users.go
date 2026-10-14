@@ -9,7 +9,7 @@ import (
 )
 
 // Users returns all human user accounts found in the directory tree.
-// It scans the Users/ directory for home directories and supplements
+// It scans the (merged) Users/ directory for home directories and supplements
 // each entry with metadata from dslocal node plists when available.
 func (s *Source) Users() ([]macfor.User, error) {
 	usersPath, err := s.resolve("Users")
@@ -17,7 +17,9 @@ func (s *Source) Users() ([]macfor.User, error) {
 		return nil, err
 	}
 
-	entries, err := os.ReadDir(usersPath)
+	// List Users/ merged across all roots: on a 10.15+ System volume Users/ is
+	// an empty firmlink placeholder and the home directories live on Data.
+	entries, err := s.readDirMerged("Users")
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
