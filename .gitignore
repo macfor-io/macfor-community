@@ -54,3 +54,6 @@ debug/
 
 # Internal AI-assistant guidance (kept local, not published to the OSS repo)
 /CLAUDE.md
+
+# GoReleaser output
+dist/

@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/macfor-io/macfor-community/pkg/macfor"
 	"github.com/macfor-io/macfor-community/pkg/macfor/manifestpack"
 	macforparquet "github.com/macfor-io/macfor-community/pkg/macfor/parquet"
 )
@@ -81,6 +82,9 @@ type Container struct {
 	// manifestProvenance records the artifact-manifest definitions that drove
 	// the collection. Stored so every manifest-construction path can attach it.
 	manifestProvenance *manifestpack.Provenance
+
+	// license records the license the collecting build ran under.
+	license *macfor.LicenseInfo
 
 	// collectionStartedAt is when the collection began.
 	collectionStartedAt time.Time
@@ -231,6 +235,7 @@ func (c *Container) SetCollectionMetadata(meta CollectionMeta) {
 		Statistics:         CollectionStats{},
 		RecordFormat:       string(c.RecordFormat()),
 		ManifestProvenance: c.manifestProvenance,
+		License:            c.license,
 	}
 
 	c.custodyLog = &ChainOfCustodyLog{
@@ -277,6 +282,38 @@ func (c *Container) SetManifestProvenance(prov *manifestpack.Provenance) {
 			"digest":         prov.Digest,
 			"manifest_count": len(prov.Entries),
 		},
+	})
+}
+
+// SetLicense records the license the collecting build ran under into the
+// manifest and as a chain-of-custody event. Call after SetCollectionMetadata. A
+// nil license is ignored.
+func (c *Container) SetLicense(license *macfor.LicenseInfo) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if license == nil {
+		return
+	}
+	c.license = license
+	if c.manifest != nil {
+		c.manifest.License = license
+	}
+
+	details := map[string]any{
+		"license_id": license.LicenseID,
+		"customer":   license.Customer,
+		"tier":       license.Tier,
+		"key_id":     license.KeyID,
+	}
+	if !license.ExpiresAt.IsZero() {
+		details["expires_at"] = license.ExpiresAt
+	}
+	c.addCustodyEntryLocked(ChainOfCustodyEntry{
+		Timestamp: time.Now(),
+		Action:    CustodyActionLicense,
+		Actor:     actorMacfor,
+		Details:   details,
 	})
 }
 
@@ -328,6 +365,7 @@ func (c *Container) AddPluginSummary(summary PluginSummary) {
 			Statistics:         CollectionStats{},
 			RecordFormat:       string(c.RecordFormat()),
 			ManifestProvenance: c.manifestProvenance,
+			License:            c.license,
 		}
 	}
 
@@ -367,6 +405,7 @@ func (c *Container) Finalize() error {
 			Statistics:         CollectionStats{},
 			RecordFormat:       string(c.RecordFormat()),
 			ManifestProvenance: c.manifestProvenance,
+			License:            c.license,
 		}
 	}
 	c.manifest.CompletedAt = now

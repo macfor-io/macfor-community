@@ -39,6 +39,10 @@ type Config struct {
 
 	// DryRun indicates detection-only mode (no collection).
 	DryRun bool
+
+	// License is the license the build runs under, recorded in the evidence
+	// container. Nil for builds without a license.
+	License *macfor.LicenseInfo
 }
 
 // Result contains the results of an orchestration run.
@@ -256,6 +260,9 @@ func (o *Orchestrator) Run(ctx context.Context) (*Result, error) {
 
 	// Record the provenance of the manifest definitions driving this collection.
 	o.recordManifestProvenance(applicablePlugins)
+
+	// Record the license the build runs under.
+	o.config.Container.SetLicense(o.config.License)
 
 	// Run collection phase.
 	collectionResults := o.runCollection(ctx, applicablePlugins, detectionResults)

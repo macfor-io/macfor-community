@@ -1102,6 +1102,85 @@ func TestContainer_SetManifestProvenance(t *testing.T) {
 	}
 }
 
+func TestContainer_SetLicense(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "test.zip")
+
+	c, err := NewContainer(Config{OutputPath: path})
+	if err != nil {
+		t.Fatalf("NewContainer() error = %v", err)
+	}
+
+	expires := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
+	c.SetCollectionMetadata(CollectionMeta{
+		CollectionID: testCollectionID,
+		ToolVersion:  "1.0.0",
+		SourceType:   "live",
+	})
+	c.SetLicense(nil)
+	c.SetLicense(&macfor.LicenseInfo{
+		LicenseID: "lic-001",
+		Customer:  "Example Corp",
+		Tier:      "pro",
+		ExpiresAt: expires,
+		KeyID:     "abcd1234",
+	})
+	if err := c.Finalize(); err != nil {
+		t.Fatalf("Finalize() error = %v", err)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	// manifest.json carries the license block.
+	var manifest Manifest
+	if err := json.Unmarshal([]byte(readFromZip(t, path, "manifest.json")), &manifest); err != nil {
+		t.Fatalf("unmarshaling manifest: %v", err)
+	}
+	if manifest.License == nil {
+		t.Fatal("manifest.License is nil, want recorded license")
+	}
+	if manifest.License.LicenseID != "lic-001" || !manifest.License.ExpiresAt.Equal(expires) {
+		t.Errorf("unexpected license: %+v", manifest.License)
+	}
+
+	// chain-of-custody.json carries exactly one license event.
+	var custody ChainOfCustodyLog
+	if err := json.Unmarshal([]byte(readFromZip(t, path, "chain-of-custody.json")), &custody); err != nil {
+		t.Fatalf("unmarshaling custody: %v", err)
+	}
+	count := 0
+	for _, e := range custody.Entries {
+		if e.Action == CustodyActionLicense {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("%q custody entries = %d, want 1", CustodyActionLicense, count)
+	}
+}
+
+func TestContainer_NoLicense(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "test.zip")
+
+	c, err := NewContainer(Config{OutputPath: path})
+	if err != nil {
+		t.Fatalf("NewContainer() error = %v", err)
+	}
+	if err := c.Finalize(); err != nil {
+		t.Fatalf("Finalize() error = %v", err)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	// An unlicensed build omits the license block entirely.
+	if strings.Contains(readFromZip(t, path, "manifest.json"), `"license"`) {
+		t.Error("manifest.json contains a license block for an unlicensed build")
+	}
+}
+
 func verifyManifestJSON(t *testing.T, path string) {
 	t.Helper()
 	manifestContent := readFromZip(t, path, "manifest.json")

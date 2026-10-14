@@ -40,6 +40,36 @@ archives:
       - LICENSE
       - README.md
 
+homebrew_casks:
+  - name: macfor
+    ids: [macfor]
+    binaries: [macfor]
+    homepage: https://macfor.io
+    description: macOS forensic artifact collector
+    directory: Casks
+    repository:
+      owner: macfor-io
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    commit_author:
+      name: Macfor
+      email: macforio@proton.me
+    commit_msg_template: "macfor {{ .Tag }}"
+    # Prereleases stay out of the tap.
+    skip_upload: auto
+    caveats: |
+      macfor needs Full Disk Access (grant it to your terminal) and usually
+      sudo to read protected artifacts.
+    hooks:
+      post:
+        # Release binaries are unsigned; clear quarantine so Gatekeeper
+        # doesn't block the first run.
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/macfor"]
+          end
+
 checksum:
   name_template: 'checksums.txt'
   algorithm: sha256

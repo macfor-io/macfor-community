@@ -31,6 +31,12 @@ Learn more at **[macfor.io](https://macfor.io)**.
 
 ## Installation
 
+### Homebrew
+
+```bash
+brew install macfor-io/tap/macfor
+```
+
 ### Prebuilt binary (macOS)
 
 Download the latest release from the [releases page][releases] and extract:

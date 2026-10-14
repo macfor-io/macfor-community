@@ -16,6 +16,7 @@ func TestExitCode(t *testing.T) {
 		{"success", nil, ExitOK},
 		{"partial collection", ErrPartialCollection, ExitPartial},
 		{"wrapped partial collection", fmt.Errorf("collect: %w", ErrPartialCollection), ExitPartial},
+		{"license refused", fmt.Errorf("%w: license expired", ErrLicense), ExitLicense},
 		{"fatal error", errors.New("--output is required"), ExitFailure},
 		{"cancelled", context.Canceled, ExitFailure},
 	}

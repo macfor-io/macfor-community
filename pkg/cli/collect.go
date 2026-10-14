@@ -156,6 +156,12 @@ func runCollect(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("invalid --parquet-compression: %w", err)
 	}
 
+	// Check the license before touching the source.
+	license, err := runLicenseCheck(cmd)
+	if err != nil {
+		return err
+	}
+
 	// Create source (live or directory).
 	src, err := createSource(collectFrom)
 	if err != nil {
@@ -177,7 +183,7 @@ func runCollect(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Run collection phase.
-	return runCollectionPhase(ctx, cmd, src, detectionResult)
+	return runCollectionPhase(ctx, cmd, src, license)
 }
 
 // fullDiskAccess reports whether the process has Full Disk Access. It is a
@@ -297,7 +303,7 @@ func outputNoApplicablePlugins(cmd *cobra.Command, result *orchestrator.Result) 
 }
 
 // runCollectionPhase runs the collection phase with a container.
-func runCollectionPhase(ctx context.Context, cmd *cobra.Command, src macfor.Source, _ *orchestrator.Result) error {
+func runCollectionPhase(ctx context.Context, cmd *cobra.Command, src macfor.Source, license *macfor.LicenseInfo) error {
 	// Prepare output path.
 	outputPath := collectOutput
 	if !strings.HasSuffix(strings.ToLower(outputPath), ".zip") {
@@ -327,6 +333,7 @@ func runCollectionPhase(ctx context.Context, cmd *cobra.Command, src macfor.Sour
 		Category:    collectCategory,
 		ToolVersion: Version,
 		DryRun:      false,
+		License:     license,
 	}
 
 	orch, err := orchestrator.New(config)

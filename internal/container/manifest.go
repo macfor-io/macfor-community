@@ -43,6 +43,10 @@ type Manifest struct {
 	// this collection (version + per-plugin content hashes + overall digest),
 	// so an analyst can later prove which manifest content the collection used.
 	ManifestProvenance *manifestpack.Provenance `json:"manifest_provenance,omitempty"`
+
+	// License records the license the collecting build ran under. It is
+	// absent for builds without a license, such as the open-source build.
+	License *macfor.LicenseInfo `json:"license,omitempty"`
 }
 
 // SourceInfo contains information about the source system being collected.
@@ -346,6 +350,7 @@ const (
 	CustodyActionCollectionStarted   = "collection_started"
 	CustodyActionCollectionCompleted = "collection_completed"
 	CustodyActionManifestProvenance  = "manifest_provenance"
+	CustodyActionLicense             = "license"
 	CustodyActionFileAdded           = "file_added"
 	CustodyActionRecordAdded         = "record_added"
 	CustodyActionPluginStarted       = "plugin_started"
