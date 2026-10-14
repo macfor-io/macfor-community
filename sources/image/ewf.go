@@ -98,7 +98,9 @@ func mountEWF(ctx context.Context, tools ewfTools, imagePath string) (*ewfMount,
 
 	m := &ewfMount{runner: tools.runner, removeAll: tools.removeAll, dir: dir}
 
-	if _, err := tools.runner.Run(ctx, ewfmount, imagePath, dir); err != nil {
+	setupCtx, cancel := uncancellable(ctx)
+	defer cancel()
+	if _, err := tools.runner.Run(setupCtx, ewfmount, imagePath, dir); err != nil {
 		// Nothing is mounted, so only the dir needs removing.
 		m.removed = true
 		return nil, errors.Join(fmt.Errorf("mount %s: %w", imagePath, err), m.removeAll(dir))

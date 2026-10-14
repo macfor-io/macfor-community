@@ -32,6 +32,10 @@ const (
 	// cleanupTimeout bounds the detach run after the caller's context is done.
 	cleanupTimeout = 30 * time.Second
 
+	// setupTimeout bounds an attach or ewfmount that runs on after the caller's
+	// context is cancelled (see uncancellable).
+	setupTimeout = 5 * time.Minute
+
 	// systemVersionPlist marks the System volume of a macOS install.
 	systemVersionPlist = "System/Library/CoreServices/SystemVersion.plist"
 )
@@ -288,7 +292,9 @@ func attachWith(ctx context.Context, runner commandRunner, path string, format F
 		return nil, err
 	}
 
-	out, err := runner.Run(ctx, hdiutilPath, attachArgs(path, format)...)
+	setupCtx, cancel := uncancellable(ctx)
+	defer cancel()
+	out, err := runner.Run(setupCtx, hdiutilPath, attachArgs(path, format)...)
 	if err != nil {
 		return nil, fmt.Errorf("attach %s: %w", path, err)
 	}
@@ -307,6 +313,17 @@ func attachWith(ctx context.Context, runner commandRunner, path string, format F
 		return nil, errors.Join(fmt.Errorf("attach %s: %w", path, ErrNoMountedVolume), a.cleanup())
 	}
 	return a, nil
+}
+
+// uncancellable returns a context for a setup command that must not be killed
+// when ctx is cancelled. Killing hdiutil attach does not stop the attach, which
+// the disk image service finishes on its own, but it loses the plist output
+// that names the device to detach, leaving the image attached and mounted.
+// The same holds for ewfmount and its FUSE mount. Running the command to
+// completion, then checking ctx and tearing down, keeps every attach matched
+// by a detach. setupTimeout still bounds a hung command.
+func uncancellable(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), setupTimeout)
 }
 
 // cleanup detaches on a fresh context, for use when the caller's context may
