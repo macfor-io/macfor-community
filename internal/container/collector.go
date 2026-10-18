@@ -76,8 +76,15 @@ func NewCollector(container *Container, pluginID string) *Collector {
 // The artifact metadata describes the file, and src provides the content.
 // The content is copied and hashed during addition.
 //
-// The file is stored at the path computed by artifact.ContainerPath().
-// A chain of custody entry is logged for each file added.
+// The file is stored at the path computed by artifact.ContainerPath(). When
+// another file from the same plugin and user already occupies that path (two
+// sources sharing a base name, such as Chrome's Default/History and
+// Profile 1/History), the file is stored at a counter variant of it instead
+// (History~2) so neither file nor its hash is lost; see
+// Container.AddFileModifiedUnique.
+// A chain of custody entry is logged for each file added, targeting the path
+// actually written. A renamed file's entry also carries "requested_path" (the
+// ContainerPath) and "renamed_for_collision": true.
 func (c *Collector) AddFile(ctx context.Context, artifact macfor.Artifact, src io.Reader) error {
 	select {
 	case <-ctx.Done():
@@ -85,17 +92,18 @@ func (c *Collector) AddFile(ctx context.Context, artifact macfor.Artifact, src i
 	default:
 	}
 
-	// Compute the container path
-	containerPath := artifact.ContainerPath()
+	// Compute the requested container path.
+	requestedPath := artifact.ContainerPath()
 
 	// Add the file to the container, preserving the source modified time.
 	counter := &countingReader{r: src}
-	if err := c.container.AddFileModified(containerPath, artifact.OriginalModTime, counter); err != nil {
+	containerPath, err := c.container.AddFileModifiedUnique(requestedPath, artifact.OriginalModTime, counter)
+	if err != nil {
 		c.AddError(artifact, fmt.Errorf("adding file to container: %w", err))
 		return err
 	}
 
-	// Get the hash for the custody entry
+	// Get the hash for the custody entry.
 	hashes := c.container.Hashes()
 	hash := hashes[containerPath]
 
@@ -108,6 +116,10 @@ func (c *Collector) AddFile(ctx context.Context, artifact macfor.Artifact, src i
 	}
 	if !artifact.OriginalModTime.IsZero() {
 		details["source_modified"] = artifact.OriginalModTime.Format(time.RFC3339Nano)
+	}
+	if containerPath != requestedPath {
+		details["requested_path"] = requestedPath
+		details["renamed_for_collision"] = true
 	}
 	c.container.AddCustodyEntry(ChainOfCustodyEntry{
 		Timestamp: time.Now(),
