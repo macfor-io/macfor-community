@@ -86,6 +86,10 @@ type Container struct {
 	// license records the license the collecting build ran under.
 	license *macfor.LicenseInfo
 
+	// pluginOptions holds the configured plugin options, including sensitive
+	// values, for the collectors. Only the redacted form is ever written.
+	pluginOptions PluginOptions
+
 	// collectionStartedAt is when the collection began.
 	collectionStartedAt time.Time
 
@@ -237,6 +241,7 @@ func (c *Container) SetCollectionMetadata(meta CollectionMeta) {
 		RecordFormat:       string(c.RecordFormat()),
 		ManifestProvenance: c.manifestProvenance,
 		License:            c.license,
+		PluginOptions:      c.pluginOptions.Redacted(),
 	}
 
 	c.custodyLog = &ChainOfCustodyLog{
@@ -380,6 +385,7 @@ func (c *Container) AddPluginSummary(summary PluginSummary) {
 			RecordFormat:       string(c.RecordFormat()),
 			ManifestProvenance: c.manifestProvenance,
 			License:            c.license,
+			PluginOptions:      c.pluginOptions.Redacted(),
 		}
 	}
 
@@ -420,6 +426,7 @@ func (c *Container) Finalize() error {
 			RecordFormat:       string(c.RecordFormat()),
 			ManifestProvenance: c.manifestProvenance,
 			License:            c.license,
+			PluginOptions:      c.pluginOptions.Redacted(),
 		}
 	}
 	c.manifest.CompletedAt = now

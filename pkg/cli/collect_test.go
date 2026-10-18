@@ -102,6 +102,7 @@ func resetCollectFlags() {
 	collectJSON = false
 	collectFrom = ""
 	collectImage = ""
+	collectPluginOpts = nil
 }
 
 func TestCollectCommand_MissingOutput(t *testing.T) {

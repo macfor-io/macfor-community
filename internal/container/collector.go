@@ -18,6 +18,9 @@ import (
 // Collector adapts the evidence container to the macfor.Collector interface.
 // It handles writing files and records to the container, tracks errors,
 // and logs collection activity.
+//
+// Collector also implements macfor.OptionProvider, exposing the options
+// configured for its plugin with Container.SetPluginOptions.
 type Collector struct {
 	container *Container
 	pluginID  string
@@ -70,6 +73,13 @@ func NewCollector(container *Container, pluginID string) *Collector {
 		recordWriter: rw,
 		startedAt:    time.Now(),
 	}
+}
+
+// Option returns the value of the named option configured for this
+// collector's plugin, or "" when it is not set. Options configured for other
+// plugins are never visible. It implements macfor.OptionProvider.
+func (c *Collector) Option(name string) string {
+	return c.container.pluginOption(c.pluginID, name)
 }
 
 // AddFile adds a file artifact to the evidence container.
@@ -316,7 +326,10 @@ func (c *Collector) ErrorCount() int {
 }
 
 // Ensure Collector implements macfor.Collector.
-var _ macfor.Collector = (*Collector)(nil)
+var (
+	_ macfor.Collector      = (*Collector)(nil)
+	_ macfor.OptionProvider = (*Collector)(nil)
+)
 
 // countingReader counts the bytes read through it.
 type countingReader struct {
