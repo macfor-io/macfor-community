@@ -7,10 +7,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -32,6 +34,15 @@ const (
 	// containerFormatVersion is the evidence-container format version.
 	containerFormatVersion = "1.4"
 )
+
+// ErrPathExists is returned when a file is added at a container path that
+// has already been written. Generated container files (manifest, records,
+// logs) must never be silently renamed, so for them a collision is an error.
+var ErrPathExists = errors.New("container path already written")
+
+// collisionSeparator separates a file's stem from the counter inserted to
+// disambiguate colliding collected-file paths (History -> History~2).
+const collisionSeparator = "~"
 
 // Config holds configuration for creating an evidence container.
 type Config struct {
@@ -63,6 +74,11 @@ type Container struct {
 	// hashes maps file paths within the container to their SHA-256 hashes.
 	hashes map[string]string
 	mu     sync.Mutex
+
+	// written holds every path for which a ZIP entry has been created, so a
+	// second write to the same path can be rejected or disambiguated. A ZIP
+	// with two same-named entries cannot be verified against hashes.json.
+	written map[string]struct{}
 
 	// closed tracks whether the container has been finalized.
 	closed bool
@@ -128,20 +144,23 @@ func NewContainer(cfg Config) (*Container, error) {
 		file:                f,
 		zipWriter:           zip.NewWriter(f),
 		hashes:              make(map[string]string),
+		written:             make(map[string]struct{}),
 		collectionStartedAt: time.Now(),
 	}, nil
 }
 
 // AddFile adds a file generated during collection (manifest, records, logs)
 // to the container. The entry's modified time is the time it is written.
+// Writing to a path that is already taken fails with ErrPathExists.
 func (c *Container) AddFile(path string, r io.Reader) error {
 	return c.AddFileModified(path, time.Now(), r)
 }
 
 // AddFileModified adds a file to the container with the specified path,
-// stamping the ZIP entry with the given modified time. For collected
-// evidence this is the source file's modification time, so extracted files
-// carry their original mtime. A zero time leaves the entry undated.
+// stamping the ZIP entry with the given modified time. A zero time leaves the
+// entry undated. Writing to a path that is already taken fails with
+// ErrPathExists and writes nothing; use AddFileModifiedUnique for collected
+// evidence, whose paths may legitimately collide.
 //
 // ZIP headers store the modified time to whole-second precision; callers
 // needing the exact value must record it separately.
@@ -154,11 +173,69 @@ func (c *Container) AddFileModified(path string, modified time.Time, r io.Reader
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if _, taken := c.written[path]; taken {
+		return fmt.Errorf("adding %q: %w", path, ErrPathExists)
+	}
+	return c.writeLocked(path, modified, r)
+}
+
+// AddFileModifiedUnique adds a collected evidence file like AddFileModified,
+// but when path is already taken it stores the file at a deterministic unique
+// variant instead, inserting a counter before the extension: History becomes
+// History~2, report.md becomes report~2.md, then ~3, and so on. A dotfile
+// with no further extension keeps its leading dot (.zsh_history~2).
+//
+// It returns the path actually written, which callers must use for hash
+// lookups and custody records. The path is chosen and reserved under the
+// container lock held for the whole write, so concurrent callers can never
+// be given the same path.
+func (c *Container) AddFileModifiedUnique(path string, modified time.Time, r io.Reader) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	actual := c.uniquePathLocked(path)
+	if err := c.writeLocked(actual, modified, r); err != nil {
+		return "", err
+	}
+	return actual, nil
+}
+
+// uniquePathLocked returns path if it is free, otherwise the first free
+// counter variant of it. Caller must hold c.mu.
+func (c *Container) uniquePathLocked(path string) string {
+	if _, taken := c.written[path]; !taken {
+		return path
+	}
+	for n := 2; ; n++ {
+		candidate := collisionVariant(path, n)
+		if _, taken := c.written[candidate]; !taken {
+			return candidate
+		}
+	}
+}
+
+// collisionVariant inserts collisionSeparator and n before the extension of
+// path's final element. A name whose only dot is its leading one (a dotfile)
+// is treated as having no extension.
+func collisionVariant(path string, n int) string {
+	dir, base := filepath.Split(path)
+	ext := filepath.Ext(base)
+	stem := base[:len(base)-len(ext)]
+	if stem == "" {
+		stem, ext = base, ""
+	}
+	return dir + stem + collisionSeparator + strconv.Itoa(n) + ext
+}
+
+// writeLocked creates the ZIP entry at path, copies r into it while hashing,
+// and records the path and hash. Caller must hold c.mu and must have checked
+// that path is free.
+func (c *Container) writeLocked(path string, modified time.Time, r io.Reader) error {
 	if c.closed {
 		return fmt.Errorf("container is closed")
 	}
 
-	// Create file header with Store method (no compression)
+	// Create file header with Store method (no compression).
 	header := &zip.FileHeader{
 		Name:     path,
 		Method:   zip.Store,
@@ -170,8 +247,9 @@ func (c *Container) AddFileModified(path string, modified time.Time, r io.Reader
 		c.hadError = true
 		return fmt.Errorf("creating zip entry %q: %w", path, err)
 	}
+	c.written[path] = struct{}{}
 
-	// Hash while writing using TeeReader
+	// Hash while writing using TeeReader.
 	hasher := sha256.New()
 	tee := io.TeeReader(r, hasher)
 
@@ -180,7 +258,7 @@ func (c *Container) AddFileModified(path string, modified time.Time, r io.Reader
 		return fmt.Errorf("writing to zip entry %q: %w", path, err)
 	}
 
-	// Store the hash
+	// Store the hash.
 	c.hashes[path] = hex.EncodeToString(hasher.Sum(nil))
 
 	return nil

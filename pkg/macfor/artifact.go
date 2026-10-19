@@ -90,6 +90,15 @@ func (a *Artifact) Validate() error {
 //
 // For system-level artifacts (empty Username), "system" is used as the user directory.
 // The filename is extracted from SourcePath if available, otherwise falls back to Type.
+//
+// This is the requested path, not necessarily the stored one. Two files from
+// the same plugin and user that share a base name (e.g. Chrome's
+// Default/History and Profile 1/History) map to the same ContainerPath; the
+// evidence container then stores the later file at a counter variant
+// (History~2, report~2.md) and records the actual path in hashes.json and the
+// chain-of-custody entry (with "requested_path" and "renamed_for_collision").
+// Records that reference a collected file by ContainerPath therefore cannot
+// know a collision suffix; resolve such references through the custody log.
 func (a *Artifact) ContainerPath() string {
 	// Determine the user directory
 	userDir := a.Username

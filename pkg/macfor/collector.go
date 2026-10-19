@@ -44,7 +44,9 @@ func (l LogLevel) String() string {
 type Collector interface {
 	// AddFile adds a file artifact to the evidence container.
 	// The artifact metadata describes the file, and src provides the content.
-	// The content is copied and hashed during addition.
+	// The content is copied and hashed during addition. It is stored at
+	// artifact.ContainerPath(), or at a counter variant of it (History~2)
+	// when another file already occupies that path.
 	AddFile(ctx context.Context, artifact Artifact, src io.Reader) error
 
 	// AddRecord adds a structured record to the evidence container.
