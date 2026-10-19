@@ -62,4 +62,32 @@ type Collector interface {
 	Log(level LogLevel, format string, args ...any)
 }
 
+// OptionProvider is an optional interface a Collector implements to expose
+// the options the investigator configured for the plugin it was created for
+// (for example with `macfor collect --plugin-opt <plugin_id>.<key>=<value>`).
+// A collector only returns options scoped to its own plugin.
+//
+// Plugins discover it with a type assertion, by name or structurally:
+//
+//	if op, ok := out.(macfor.OptionProvider); ok {
+//		skip := op.Option("skip_content") == "true"
+//	}
+//
+// Option returns "" for an option that was not set. Option values can be
+// secrets (passwords, keys), so plugins must never log or record them.
+type OptionProvider interface {
+	// Option returns the value configured for the named option, or "" when
+	// it is not set.
+	Option(name string) string
+}
+
+// CollectorOption returns the named option from c when c implements
+// OptionProvider, and "" otherwise.
+func CollectorOption(c Collector, name string) string {
+	if op, ok := c.(OptionProvider); ok {
+		return op.Option(name)
+	}
+	return ""
+}
+
 // Note: Artifact type is defined in artifact.go

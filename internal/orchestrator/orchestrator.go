@@ -44,6 +44,13 @@ type Config struct {
 	// container. Nil for builds without a license.
 	License *macfor.LicenseInfo
 
+	// PluginOptions holds per-plugin options, keyed by plugin ID and then
+	// option key. Each plugin's collector exposes only that plugin's options
+	// through macfor.OptionProvider. The options are recorded in the evidence
+	// container with sensitive values masked. Every plugin ID must be
+	// registered.
+	PluginOptions container.PluginOptions
+
 	// OnCollectionStart, if set, is called with the container once its
 	// collection metadata, manifest provenance, and license are recorded and
 	// before any plugin collects. It is the earliest point at which a
@@ -87,6 +94,11 @@ type Result struct {
 
 	// Cancelled indicates whether the run was cancelled.
 	Cancelled bool
+
+	// PluginOptions is the configured plugin options as
+	// {plugin_id: {key: value}}, with sensitive values masked as
+	// container.MaskedOptionValue. It is nil when no options were set.
+	PluginOptions map[string]map[string]string
 }
 
 // PluginResult contains the result of processing a single plugin.
@@ -209,6 +221,30 @@ func (o *Orchestrator) reportProgress(p Progress) {
 //  3. If not dry-run, runs collection on applicable plugins
 //  4. Returns aggregated results
 func (o *Orchestrator) Run(ctx context.Context) (*Result, error) {
+	if err := validatePluginOptions(o.config.PluginOptions); err != nil {
+		return nil, err
+	}
+
+	result, err := o.run(ctx)
+	if result != nil {
+		result.PluginOptions = o.config.PluginOptions.Redacted()
+	}
+	return result, err
+}
+
+// validatePluginOptions checks that every plugin option targets a registered
+// plugin. Errors name the plugin and key, never the value.
+func validatePluginOptions(opts container.PluginOptions) error {
+	for _, id := range opts.PluginIDs() {
+		if _, ok := macfor.ByID(id); !ok {
+			return fmt.Errorf("plugin options for unknown plugin: %s", id)
+		}
+	}
+	return nil
+}
+
+// run performs the orchestration workflow described on Run.
+func (o *Orchestrator) run(ctx context.Context) (*Result, error) {
 	startTime := time.Now()
 
 	o.reportProgress(Progress{
@@ -277,6 +313,9 @@ func (o *Orchestrator) Run(ctx context.Context) (*Result, error) {
 
 	// Record the license the build runs under.
 	o.config.Container.SetLicense(o.config.License)
+
+	// Record the plugin options and make them available to the collectors.
+	o.config.Container.SetPluginOptions(o.config.PluginOptions)
 
 	if o.config.OnCollectionStart != nil {
 		o.config.OnCollectionStart(o.config.Container)

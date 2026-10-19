@@ -103,6 +103,40 @@ sudo ./macfor collect --output ./evidence.zip
 ./macfor list plugins
 ```
 
+### Plugin options
+
+Some plugins accept options. Pass them with the repeatable `--plugin-opt` flag
+as `<plugin_id>.<key>=<value>` (or `<plugin_id>:<key>=<value>`). Plugin IDs
+contain dots, so macfor matches the entry against the registered plugin IDs and
+the longest match wins. Unknown plugins and malformed entries are rejected
+before collection starts.
+
+| Value | Meaning |
+|-------|---------|
+| `VALUE` | A literal, recorded verbatim in the evidence manifest. |
+| `env:NAME` | The value of environment variable `NAME` (an error if it is unset). |
+| `file:PATH` | The contents of `PATH`, with one trailing newline removed. |
+| `literal:VALUE` | `VALUE` verbatim, even if it starts with `env:` or `file:`. |
+
+Pass secrets with `env:` or `file:` so they stay out of shell history and `ps`
+output. For example, with the Pro build's Claude Desktop collector:
+
+```bash
+read -rs CLAUDE_SAFE_STORAGE_PW && export CLAUDE_SAFE_STORAGE_PW
+macfor-pro collect --plugin ai.claudedesktop \
+  --plugin-opt ai.claudedesktop.skip_content=true \
+  --plugin-opt ai.claudedesktop.audit_key=env:CLAUDE_SAFE_STORAGE_PW \
+  --output ./evidence.zip
+```
+
+The options are recorded in `manifest.json` (`plugin_options`, as
+`{plugin_id: {key: value}}`) and as a `plugin_options` chain-of-custody event,
+so the collection can be reproduced. Values read from `env:` or `file:`, and
+values of keys that look secret (containing `key`, `token`, `secret`,
+`password`, `passwd`, `credential` or `auth`), are recorded and displayed only
+as `"[set]"`, including in `--dry-run` and `--json` output. `--dry-run` lists
+the configured options.
+
 ### Exit codes
 
 | Code | Meaning |
@@ -132,7 +166,7 @@ Missing an artifact you'd like in the community edition? Open a
 
 ```
 evidence.zip
-├── manifest.json              Collection metadata, system info, plugin results
+├── manifest.json              Collection metadata, system info, plugin results, plugin options
 ├── chain-of-custody.json      Access audit log
 ├── hashes.json                SHA-256 hashes for every file
 ├── artifacts/                 Raw collected files, laid out by category/plugin/user

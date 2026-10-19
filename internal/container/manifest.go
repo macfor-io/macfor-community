@@ -47,6 +47,12 @@ type Manifest struct {
 	// License records the license the collecting build ran under. It is
 	// absent for builds without a license, such as the open-source build.
 	License *macfor.LicenseInfo `json:"license,omitempty"`
+
+	// PluginOptions records the plugin options the collection ran with, as
+	// {plugin_id: {key: value}}. Values supplied from an environment variable
+	// or a file, and values of secret-looking keys, are masked as "[set]";
+	// other values are recorded verbatim so the collection is reproducible.
+	PluginOptions map[string]map[string]string `json:"plugin_options,omitempty"`
 }
 
 // SourceInfo contains information about the source system being collected.

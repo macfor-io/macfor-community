@@ -32,6 +32,7 @@ var (
 	collectImage              string
 	collectRecordFormat       string
 	collectParquetCompression string
+	collectPluginOpts         []string
 )
 
 // CollectResult represents the result of a collection run.
@@ -45,6 +46,10 @@ type CollectResult struct {
 	Duration      string            `json:"duration"`
 	DurationMs    int64             `json:"duration_ms"`
 	DetectionOnly bool              `json:"detection_only,omitempty"`
+
+	// PluginOptions lists the configured plugin options with sensitive
+	// values masked as "[set]".
+	PluginOptions map[string]map[string]string `json:"plugin_options,omitempty"`
 }
 
 // PluginRunResult represents the result of a single plugin execution.
@@ -116,6 +121,29 @@ Examples:
   macfor collect --image ./suspect.dmg --output ./evidence.zip
   macfor collect --image ./suspect.E01 --dry-run
 
+  # Pass options to a plugin (repeatable): <plugin_id>.<key>=<value>, or
+  # <plugin_id>:<key>=<value>. Options are defined by each plugin, e.g. the
+  # Pro build's Claude Desktop collector:
+  macfor collect --plugin ai.claudedesktop \
+    --plugin-opt ai.claudedesktop.skip_content=true \
+    --plugin-opt ai.claudedesktop.audit_key=env:CLAUDE_SAFE_STORAGE_PW \
+    --output ./evidence.zip
+
+Plugin options:
+  --plugin-opt sets one option for one plugin and can be repeated. The plugin
+  ID is matched against the registered plugins (longest match wins), so dotted
+  IDs such as ai.claudedesktop work with either separator. A value is one of:
+    VALUE           a literal, recorded verbatim in the evidence manifest
+    env:NAME        the value of environment variable NAME (must be set)
+    file:PATH       the contents of PATH, minus one trailing newline
+    literal:VALUE   VALUE verbatim, even if it starts with env: or file:
+  Pass secrets with env: or file: so they stay out of shell history and ps:
+    --plugin-opt ai.claudedesktop.audit_key=env:CLAUDE_SAFE_STORAGE_PW
+  The options are recorded in manifest.json (plugin_options) and the chain of
+  custody. Values read from env: or file:, and values of keys that look secret
+  (key, token, secret, password, passwd, credential, auth), are recorded and
+  displayed only as "[set]".
+
 Exit codes:
   0  Collection completed without errors
   1  Collection failed
@@ -137,6 +165,9 @@ Exit codes:
 		`Record output format: "jsonl" (default), "parquet", or "both"`)
 	cmd.Flags().StringVar(&collectParquetCompression, "parquet-compression", "snappy",
 		`Parquet compression codec: "snappy" (default), "zstd", "gzip", or "none"`)
+	// StringArray, not StringSlice: option values may contain commas.
+	cmd.Flags().StringArrayVar(&collectPluginOpts, "plugin-opt", nil,
+		"Plugin option <plugin_id>.<key>=<value> (repeatable); value may be env:NAME or file:PATH for secrets")
 
 	// Mark output as required for non-dry-run mode.
 	// We handle this in runCollect to allow --dry-run without --output.
@@ -167,6 +198,14 @@ func runCollect(cmd *cobra.Command, _ []string) error {
 	if _, err := macforparquet.ParseCompression(collectParquetCompression); err != nil {
 		return fmt.Errorf("invalid --parquet-compression: %w", err)
 	}
+
+	// Parse plugin options before touching the source, so a bad entry fails
+	// fast.
+	pluginOpts, err := parsePluginOpts(collectPluginOpts, registeredPluginIDs(), defaultPluginOptEnv)
+	if err != nil {
+		return err
+	}
+	warnLiteralSecretOptions(pluginOpts)
 
 	// Check the license before touching the source.
 	license, err := runLicenseCheck(cmd)
@@ -202,7 +241,7 @@ func runCollect(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Run detection first to check if we have applicable plugins.
-	detectionResult, err := runDetectionPhase(ctx, src)
+	detectionResult, err := runDetectionPhase(ctx, src, pluginOpts)
 	if err != nil {
 		return err
 	}
@@ -213,7 +252,7 @@ func runCollect(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Run collection phase.
-	return runCollectionPhase(ctx, cmd, handle, license)
+	return runCollectionPhase(ctx, cmd, handle, license, pluginOpts)
 }
 
 // fullDiskAccess reports whether the process has Full Disk Access. It is a
@@ -291,13 +330,14 @@ func createSource(ctx context.Context, fromPath, imagePath string) (macfor.Sourc
 }
 
 // runDetectionPhase runs the detection phase to identify applicable plugins.
-func runDetectionPhase(ctx context.Context, src macfor.Source) (*orchestrator.Result, error) {
+func runDetectionPhase(ctx context.Context, src macfor.Source, pluginOpts container.PluginOptions) (*orchestrator.Result, error) {
 	config := orchestrator.Config{
-		Source:      src,
-		PluginIDs:   collectPlugins,
-		Category:    collectCategory,
-		ToolVersion: Version,
-		DryRun:      true,
+		Source:        src,
+		PluginIDs:     collectPlugins,
+		Category:      collectCategory,
+		ToolVersion:   Version,
+		DryRun:        true,
+		PluginOptions: pluginOpts,
 	}
 
 	orch, err := orchestrator.New(config)
@@ -351,7 +391,7 @@ func outputNoApplicablePlugins(cmd *cobra.Command, result *orchestrator.Result) 
 }
 
 // runCollectionPhase runs the collection phase with a container.
-func runCollectionPhase(ctx context.Context, cmd *cobra.Command, handle *sourceHandle, license *macfor.LicenseInfo) error {
+func runCollectionPhase(ctx context.Context, cmd *cobra.Command, handle *sourceHandle, license *macfor.LicenseInfo, pluginOpts container.PluginOptions) error {
 	// Prepare output path.
 	outputPath := collectOutput
 	if !strings.HasSuffix(strings.ToLower(outputPath), ".zip") {
@@ -385,6 +425,7 @@ func runCollectionPhase(ctx context.Context, cmd *cobra.Command, handle *sourceH
 		ToolVersion:       Version,
 		DryRun:            false,
 		License:           license,
+		PluginOptions:     pluginOpts,
 		OnCollectionStart: onStart,
 		BeforeFinalize:    beforeFinalize,
 	}
@@ -463,6 +504,7 @@ func convertOrchestratorResult(result *orchestrator.Result, containerPath string
 		Duration:      result.Duration.Round(time.Millisecond).String(),
 		DurationMs:    result.Duration.Milliseconds(),
 		DetectionOnly: result.DetectionOnly,
+		PluginOptions: result.PluginOptions,
 	}
 
 	for _, pr := range result.PluginResults {
@@ -496,6 +538,7 @@ func outputDryRunResultsFromOrchestrator(cmd *cobra.Command, result *orchestrato
 	for _, w := range warnings {
 		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Warning: %s\n", w)
 	}
+	printPluginOptions(cmd.OutOrStdout(), result.PluginOptions)
 
 	// Table output for dry run.
 	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Dry Run - Detection Results")
