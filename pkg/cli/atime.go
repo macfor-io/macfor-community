@@ -9,6 +9,25 @@ import (
 	"github.com/macfor-io/macfor-community/pkg/macfor/atime"
 )
 
+// accessTimeState is the access-time state a collect command shares across
+// its detection and collection phases: the source's volumes, and the tracker
+// observing plugin reads (nil when no volume may update access times). One
+// tracker spans both phases, so reads made by the detection-only pass,
+// before the evidence container exists, are recorded in it too.
+type accessTimeState struct {
+	volumes []atime.Volume
+	tracker *atime.Tracker
+}
+
+// newAccessTimeState returns the state for a source with the given volumes.
+func newAccessTimeState(vols []atime.Volume) accessTimeState {
+	st := accessTimeState{volumes: vols}
+	if atime.AnyMayUpdate(vols) {
+		st.tracker = atime.NewTracker()
+	}
+	return st
+}
+
 // probeVolumes probes the volumes behind the source for their access-time
 // policies. It is a variable so tests can replace the probe.
 var probeVolumes = atime.ProbeSource

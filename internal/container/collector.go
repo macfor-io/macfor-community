@@ -200,9 +200,9 @@ func (c *Collector) AddError(artifact macfor.Artifact, err error) {
 		Actor:     actorMacfor,
 		Target:    artifact.SourcePath,
 		Details: map[string]any{
-			custodyKeyPlugin: c.pluginID,
-			"operation":      artifact.Type,
-			"error":          err.Error(),
+			custodyKeyPlugin:    c.pluginID,
+			custodyKeyOperation: artifact.Type,
+			"error":             err.Error(),
 		},
 	})
 }
@@ -240,9 +240,9 @@ func (c *Collector) RecordCollectError(err error) {
 			Actor:     actorMacfor,
 			Target:    c.pluginID,
 			Details: map[string]any{
-				custodyKeyPlugin: c.pluginID,
-				"operation":      "collect",
-				"error":          e.Error(),
+				custodyKeyPlugin:    c.pluginID,
+				custodyKeyOperation: "collect",
+				"error":             e.Error(),
 			},
 		})
 	}

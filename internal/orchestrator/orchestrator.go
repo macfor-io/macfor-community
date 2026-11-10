@@ -57,6 +57,14 @@ type Config struct {
 	// orchestrator probes them itself (atime.ProbeSource).
 	Volumes []atime.Volume
 
+	// AccessTimes, if set, observes every read plugins make through Source
+	// during detection and collection. A caller that runs several
+	// orchestrations over one source (detection, then collection) passes the
+	// same tracker to each, so reads made before the evidence container
+	// exists are recorded too. When nil, a full collection creates one if any
+	// volume in Volumes may update access times.
+	AccessTimes *atime.Tracker
+
 	// OnCollectionStart, if set, is called with the container once its
 	// collection metadata, manifest provenance, and license are recorded and
 	// before any plugin collects. It is the earliest point at which a
@@ -100,6 +108,10 @@ type Result struct {
 
 	// Cancelled indicates whether the run was cancelled.
 	Cancelled bool
+
+	// AccessTimes summarises the observed reads and access-time changes. It
+	// is nil when reads were not observed.
+	AccessTimes *atime.Summary
 
 	// PluginOptions is the configured plugin options as
 	// {plugin_id: {key: value}}, with sensitive values masked as
@@ -189,6 +201,12 @@ type Orchestrator struct {
 	config   Config
 	progress ProgressCallback
 	mu       sync.RWMutex
+
+	// vols and tracker are set at the start of a run: the source's volumes
+	// and the tracker observing plugin reads (nil when reads are not
+	// observed).
+	vols    []atime.Volume
+	tracker *atime.Tracker
 }
 
 // New creates a new Orchestrator with the given configuration.
@@ -272,6 +290,9 @@ func (o *Orchestrator) run(ctx context.Context) (*Result, error) {
 		}, nil
 	}
 
+	// Decide whether plugin reads are observed before detection reads anything.
+	o.setupAccessTimes()
+
 	// Run detection phase.
 	detectionResults := o.runDetection(ctx, plugins)
 
@@ -297,6 +318,7 @@ func (o *Orchestrator) run(ctx context.Context) (*Result, error) {
 			Duration:      time.Since(startTime),
 			DetectionOnly: true,
 			PluginResults: o.buildPluginResults(plugins, detectionResults, nil),
+			AccessTimes:   o.accessTimeSummary(),
 		}, nil
 	}
 
@@ -314,8 +336,15 @@ func (o *Orchestrator) run(ctx context.Context) (*Result, error) {
 	// Set up collection metadata.
 	o.setupCollectionMetadata()
 
-	// Record the volumes behind the source and their access-time policies.
-	o.config.Container.SetVolumes(o.volumes())
+	// Record the volumes behind the source and their access-time policies,
+	// and start recording observed access-time changes in the chain of
+	// custody. Changes observed during detection, before the custody log
+	// existed, are delivered now.
+	o.config.Container.SetVolumes(o.vols)
+	if o.tracker != nil {
+		cont := o.config.Container
+		o.tracker.SetSink(cont.AddAccessTimeChange)
+	}
 
 	// Record the provenance of the manifest definitions driving this collection.
 	o.recordManifestProvenance(applicablePlugins)
@@ -336,6 +365,13 @@ func (o *Orchestrator) run(ctx context.Context) (*Result, error) {
 	// Check for cancellation after collection.
 	cancelled := ctx.Err() != nil
 
+	// Record the access-time summary and stop delivering events.
+	accessTimes := o.accessTimeSummary()
+	if o.tracker != nil {
+		o.tracker.SetSink(nil)
+	}
+	o.config.Container.SetAccessTimes(accessTimes)
+
 	if o.config.BeforeFinalize != nil {
 		o.config.BeforeFinalize(o.config.Container)
 	}
@@ -352,6 +388,7 @@ func (o *Orchestrator) run(ctx context.Context) (*Result, error) {
 
 	// Build final result.
 	result := o.buildResult(plugins, detectionResults, collectionResults, startTime, cancelled)
+	result.AccessTimes = accessTimes
 
 	o.reportProgress(Progress{
 		Phase:   PhaseComplete,
@@ -361,13 +398,38 @@ func (o *Orchestrator) run(ctx context.Context) (*Result, error) {
 	return result, nil
 }
 
-// volumes returns the configured source volumes, probing them when none were
-// configured.
-func (o *Orchestrator) volumes() []atime.Volume {
-	if o.config.Volumes != nil {
-		return o.config.Volumes
+// setupAccessTimes resolves the source's volumes, probing them when none
+// were configured, and the tracker that observes plugin reads: the
+// configured one, or for a full collection a new one when any volume may
+// update access times.
+func (o *Orchestrator) setupAccessTimes() {
+	o.vols = o.config.Volumes
+	if o.vols == nil {
+		o.vols = atime.ProbeSource(o.config.Source)
 	}
-	return atime.ProbeSource(o.config.Source)
+	o.tracker = o.config.AccessTimes
+	if o.tracker == nil && !o.config.DryRun && o.config.Container != nil && atime.AnyMayUpdate(o.vols) {
+		o.tracker = atime.NewTracker()
+	}
+}
+
+// sourceFor returns the source plugin pluginID reads from in phase: an
+// observed view when reads are tracked, otherwise the configured source.
+func (o *Orchestrator) sourceFor(pluginID string, phase atime.Phase) macfor.Source {
+	if o.tracker == nil {
+		return o.config.Source
+	}
+	return o.tracker.Source(o.config.Source, pluginID, phase)
+}
+
+// accessTimeSummary returns the tracker's summary, or nil when reads were
+// not observed.
+func (o *Orchestrator) accessTimeSummary() *atime.Summary {
+	if o.tracker == nil {
+		return nil
+	}
+	s := o.tracker.Summary()
+	return &s
 }
 
 // resolvePlugins determines which plugins to run based on configuration.
@@ -421,7 +483,7 @@ func (o *Orchestrator) runDetection(ctx context.Context, plugins []macfor.Plugin
 			Message:          fmt.Sprintf("Detecting %s", info.Name),
 		})
 
-		result, err := p.Detect(ctx, o.config.Source)
+		result, err := p.Detect(ctx, o.sourceFor(info.ID, atime.PhaseDetect))
 		if err != nil {
 			result = macfor.DetectionResult{
 				Applicable: false,
@@ -550,7 +612,7 @@ func (o *Orchestrator) runCollection(ctx context.Context, plugins []macfor.Plugi
 
 		// Run collection. Errors the plugin returns are recorded before
 		// finalizing so they are counted in the summary and manifest.
-		if err := p.Collect(ctx, o.config.Source, coll); err != nil {
+		if err := p.Collect(ctx, o.sourceFor(info.ID, atime.PhaseCollect), coll); err != nil {
 			coll.RecordCollectError(err)
 		}
 

@@ -32,6 +32,10 @@ const (
 	// custodyKeyPlugin is the chain-of-custody detail key for the plugin ID.
 	custodyKeyPlugin = "plugin"
 
+	// custodyKeyOperation is the chain-of-custody detail key for the
+	// operation an entry records.
+	custodyKeyOperation = "operation"
+
 	// containerFormatVersion is the evidence-container format version.
 	containerFormatVersion = "1.5"
 )
@@ -116,6 +120,9 @@ type Container struct {
 
 	// volumes is written to the manifest as source.volumes.
 	volumes []atime.Volume
+
+	// accessTimes is written to the manifest as access_times.
+	accessTimes *atime.Summary
 }
 
 // NewContainer creates a new evidence container using the provided configuration.
@@ -459,6 +466,41 @@ func (c *Container) SetVolumes(vols []atime.Volume) {
 	c.volumes = append([]atime.Volume(nil), vols...)
 }
 
+// AddAccessTimeChange records an observed access-time change as an
+// access_time_modified chain-of-custody event, timestamped when the change
+// was observed.
+func (c *Container) AddAccessTimeChange(e atime.Event) {
+	details := map[string]any{
+		custodyKeyPlugin:    e.PluginID,
+		"phase":             e.Phase,
+		custodyKeyOperation: e.Operation,
+		"attribution":       e.Attribution,
+		"before":            e.Before,
+		"after":             e.After,
+	}
+	if e.ResolvedPath != "" {
+		details["resolved_path"] = e.ResolvedPath
+	}
+	c.AddCustodyEntry(ChainOfCustodyEntry{
+		Timestamp: e.ObservedAt,
+		Action:    CustodyActionAccessTimeModified,
+		Actor:     actorMacfor,
+		Target:    e.Path,
+		Details:   details,
+	})
+}
+
+// SetAccessTimes records the summary of observed reads, written to the
+// manifest as access_times. A nil summary is ignored.
+func (c *Container) SetAccessTimes(s *atime.Summary) {
+	if s == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.accessTimes = s
+}
+
 // AddPluginSummary adds a plugin execution summary to the manifest.
 // This should be called after each plugin completes collection.
 func (c *Container) AddPluginSummary(summary PluginSummary) {
@@ -522,6 +564,7 @@ func (c *Container) Finalize() error {
 	c.manifest.CompletedAt = now
 	c.manifest.Source.Users = c.users
 	c.manifest.Source.Volumes = c.volumes
+	c.manifest.AccessTimes = c.accessTimes
 	c.manifest.Statistics.UsersProcessed = len(c.users)
 
 	// Ensure custody log exists
