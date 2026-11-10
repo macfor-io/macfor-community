@@ -50,6 +50,11 @@ type CollectResult struct {
 	// PluginOptions lists the configured plugin options with sensitive
 	// values masked as "[set]".
 	PluginOptions map[string]map[string]string `json:"plugin_options,omitempty"`
+
+	// AccessTimes totals the observed reads and access-time changes. It is
+	// absent when reads were not observed. The per-inode detail is in the
+	// evidence container's manifest.json.
+	AccessTimes *AccessTimeResult `json:"access_times,omitempty"`
 }
 
 // PluginRunResult represents the result of a single plugin execution.
@@ -366,7 +371,9 @@ func handleDetectionResult(cmd *cobra.Command, result *orchestrator.Result, hand
 	}
 
 	if collectDryRun {
-		return true, outputDryRunResultsFromOrchestrator(cmd, result, handle.describe(collectFrom), handle.warnings())
+		err := outputDryRunResultsFromOrchestrator(cmd, result, handle.describe(collectFrom), handle.warnings())
+		reportAccessTimes(cmd, result.AccessTimes, true)
+		return true, err
 	}
 
 	if result.ApplicablePlugins() == 0 {
@@ -486,6 +493,7 @@ func outputCollectionResults(cmd *cobra.Command, result *orchestrator.Result, ou
 	} else {
 		outputCollectResultTable(cmd, collectResult)
 	}
+	reportAccessTimes(cmd, result.AccessTimes, false)
 
 	if collectResult.TotalErrors > 0 {
 		if !collectJSON && !quiet {
@@ -511,6 +519,7 @@ func convertOrchestratorResult(result *orchestrator.Result, containerPath string
 		DurationMs:    result.Duration.Milliseconds(),
 		DetectionOnly: result.DetectionOnly,
 		PluginOptions: result.PluginOptions,
+		AccessTimes:   newAccessTimeResult(result.AccessTimes),
 	}
 
 	for _, pr := range result.PluginResults {

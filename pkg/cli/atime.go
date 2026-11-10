@@ -57,7 +57,7 @@ func writeAccessTimeWarning(w io.Writer, vols []atime.Volume) {
 	}
 	_, _ = fmt.Fprint(w, `  macfor never resets access times. Each change it observes is recorded in
   chain-of-custody.json with the file's stat before and after the read.
-  To avoid changes, collect from a read-only image or snapshot (--image, --from).
+  To avoid changes, collect from a disk image (--image) or a read-only mount (--from).
 
 `)
 }
@@ -76,4 +76,57 @@ func describePolicy(p atime.Policy) string {
 	default:
 		return string(p)
 	}
+}
+
+// AccessTimeResult totals the observed reads of a collection in --json
+// output.
+type AccessTimeResult struct {
+	ObservedReads      int `json:"observed_reads"`
+	Modified           int `json:"modified"`
+	LikelyCollector    int `json:"likely_collector"`
+	ConcurrentActivity int `json:"concurrent_activity"`
+	Unclosed           int `json:"unclosed,omitempty"`
+}
+
+// newAccessTimeResult converts a summary for --json output. It returns nil
+// when reads were not observed.
+func newAccessTimeResult(s *atime.Summary) *AccessTimeResult {
+	if s == nil {
+		return nil
+	}
+	return &AccessTimeResult{
+		ObservedReads:      s.ObservedReads,
+		Modified:           s.Modified,
+		LikelyCollector:    s.LikelyCollector,
+		ConcurrentActivity: s.ConcurrentActivity,
+		Unclosed:           s.Unclosed,
+	}
+}
+
+// reportAccessTimes prints a one-line access-time summary on stderr when any
+// observed read changed an access time. It is silent with --quiet or --json.
+func reportAccessTimes(cmd *cobra.Command, s *atime.Summary, dryRun bool) {
+	if quiet || collectJSON {
+		return
+	}
+	writeAccessTimeSummary(cmd.ErrOrStderr(), s, dryRun)
+}
+
+// writeAccessTimeSummary writes the access-time summary line for s to w.
+func writeAccessTimeSummary(w io.Writer, s *atime.Summary, dryRun bool) {
+	if s == nil || s.Modified == 0 {
+		return
+	}
+	if dryRun {
+		_, _ = fmt.Fprintf(w,
+			"\nAccess times: %d of %d observed reads during detection changed an access time.\n"+
+				"  A dry run writes no evidence container, so these changes are not recorded.\n",
+			s.Modified, s.ObservedReads)
+		return
+	}
+	_, _ = fmt.Fprintf(w,
+		"\nAccess times: %d of %d observed reads changed an access time "+
+			"(%d likely caused by macfor, %d during concurrent activity).\n"+
+			"  See access_time_modified entries in chain-of-custody.json and access_times in manifest.json.\n",
+		s.Modified, s.ObservedReads, s.LikelyCollector, s.ConcurrentActivity)
 }

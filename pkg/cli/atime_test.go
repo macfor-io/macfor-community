@@ -62,3 +62,53 @@ func TestWarnIfAccessTimesMayChange(t *testing.T) {
 		})
 	}
 }
+
+func TestWriteAccessTimeSummary(t *testing.T) {
+	s := &atime.Summary{ObservedReads: 1204, Modified: 37, LikelyCollector: 35, ConcurrentActivity: 2}
+
+	var buf bytes.Buffer
+	writeAccessTimeSummary(&buf, s, false)
+	want := "37 of 1204 observed reads changed an access time (35 likely caused by macfor, 2 during concurrent activity)"
+	if !strings.Contains(buf.String(), want) || !strings.Contains(buf.String(), "chain-of-custody.json") {
+		t.Errorf("summary = %q, want it to contain %q", buf.String(), want)
+	}
+
+	buf.Reset()
+	writeAccessTimeSummary(&buf, s, true)
+	if !strings.Contains(buf.String(), "not recorded") {
+		t.Errorf("dry-run summary = %q, want a note that changes are not recorded", buf.String())
+	}
+
+	for _, quietCase := range []*atime.Summary{nil, {ObservedReads: 5}} {
+		buf.Reset()
+		writeAccessTimeSummary(&buf, quietCase, false)
+		if buf.Len() != 0 {
+			t.Errorf("summary for %+v = %q, want nothing", quietCase, buf.String())
+		}
+	}
+}
+
+func TestReportAccessTimesSilentWithQuietOrJSON(t *testing.T) {
+	t.Cleanup(func() { quiet = false; collectJSON = false })
+	s := &atime.Summary{ObservedReads: 2, Modified: 1, LikelyCollector: 1}
+	for _, tc := range []struct{ quiet, json bool }{{true, false}, {false, true}} {
+		quiet, collectJSON = tc.quiet, tc.json
+		var buf bytes.Buffer
+		cmd := &cobra.Command{}
+		cmd.SetErr(&buf)
+		reportAccessTimes(cmd, s, false)
+		if buf.Len() != 0 {
+			t.Errorf("quiet=%v json=%v printed %q", tc.quiet, tc.json, buf.String())
+		}
+	}
+}
+
+func TestNewAccessTimeResult(t *testing.T) {
+	if newAccessTimeResult(nil) != nil {
+		t.Error("nil summary should give nil result")
+	}
+	r := newAccessTimeResult(&atime.Summary{ObservedReads: 3, Modified: 2, LikelyCollector: 1, ConcurrentActivity: 1})
+	if r == nil || r.ObservedReads != 3 || r.Modified != 2 || r.ConcurrentActivity != 1 {
+		t.Errorf("result = %+v", r)
+	}
+}
