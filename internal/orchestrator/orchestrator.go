@@ -62,7 +62,7 @@ type Config struct {
 	// orchestrations over one source (detection, then collection) passes the
 	// same tracker to each, so reads made before the evidence container
 	// exists are recorded too. When nil, a full collection creates one if any
-	// volume in Volumes may update access times.
+	// volume in Volumes may update access times, or if none could be probed.
 	AccessTimes *atime.Tracker
 
 	// OnCollectionStart, if set, is called with the container once its
@@ -339,7 +339,7 @@ func (o *Orchestrator) run(ctx context.Context) (*Result, error) {
 	// Record the volumes behind the source and their access-time policies,
 	// and start recording observed access-time changes in the chain of
 	// custody. Changes observed during detection, before the custody log
-	// existed, are delivered now.
+	// existed, are delivered now; later ones after each plugin.
 	o.config.Container.SetVolumes(o.vols)
 	if o.tracker != nil {
 		cont := o.config.Container
@@ -365,7 +365,9 @@ func (o *Orchestrator) run(ctx context.Context) (*Result, error) {
 	// Check for cancellation after collection.
 	cancelled := ctx.Err() != nil
 
-	// Record the access-time summary and stop delivering events.
+	// Record any remaining changes and the access-time summary, then stop
+	// delivering events.
+	o.flushAccessTimes()
 	accessTimes := o.accessTimeSummary()
 	if o.tracker != nil {
 		o.tracker.SetSink(nil)
@@ -401,14 +403,14 @@ func (o *Orchestrator) run(ctx context.Context) (*Result, error) {
 // setupAccessTimes resolves the source's volumes, probing them when none
 // were configured, and the tracker that observes plugin reads: the
 // configured one, or for a full collection a new one when any volume may
-// update access times.
+// update access times or none could be probed.
 func (o *Orchestrator) setupAccessTimes() {
 	o.vols = o.config.Volumes
 	if o.vols == nil {
 		o.vols = atime.ProbeSource(o.config.Source)
 	}
 	o.tracker = o.config.AccessTimes
-	if o.tracker == nil && !o.config.DryRun && o.config.Container != nil && atime.AnyMayUpdate(o.vols) {
+	if o.tracker == nil && !o.config.DryRun && o.config.Container != nil && atime.ShouldObserve(o.vols) {
 		o.tracker = atime.NewTracker()
 	}
 }
@@ -420,6 +422,14 @@ func (o *Orchestrator) sourceFor(pluginID string, phase atime.Phase) macfor.Sour
 		return o.config.Source
 	}
 	return o.tracker.Source(o.config.Source, pluginID, phase)
+}
+
+// flushAccessTimes delivers buffered access-time changes to the container,
+// once its chain of custody has been started.
+func (o *Orchestrator) flushAccessTimes() {
+	if o.tracker != nil {
+		o.tracker.Flush()
+	}
 }
 
 // accessTimeSummary returns the tracker's summary, or nil when reads were
@@ -492,6 +502,7 @@ func (o *Orchestrator) runDetection(ctx context.Context, plugins []macfor.Plugin
 		}
 
 		results[info.ID] = result
+		o.flushAccessTimes()
 	}
 
 	return results
@@ -615,6 +626,9 @@ func (o *Orchestrator) runCollection(ctx context.Context, plugins []macfor.Plugi
 		if err := p.Collect(ctx, o.sourceFor(info.ID, atime.PhaseCollect), coll); err != nil {
 			coll.RecordCollectError(err)
 		}
+
+		// Record the plugin's access-time changes before it is marked complete.
+		o.flushAccessTimes()
 
 		// Finalize collector and get summary.
 		summary, _ := coll.Finalize()

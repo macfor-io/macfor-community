@@ -11,7 +11,7 @@ import (
 
 // accessTimeState is the access-time state a collect command shares across
 // its detection and collection phases: the source's volumes, and the tracker
-// observing plugin reads (nil when no volume may update access times). One
+// observing plugin reads (nil when every volume is read-only or noatime). One
 // tracker spans both phases, so reads made by the detection-only pass,
 // before the evidence container exists, are recorded in it too.
 type accessTimeState struct {
@@ -22,7 +22,7 @@ type accessTimeState struct {
 // newAccessTimeState returns the state for a source with the given volumes.
 func newAccessTimeState(vols []atime.Volume) accessTimeState {
 	st := accessTimeState{volumes: vols}
-	if atime.AnyMayUpdate(vols) {
+	if atime.ShouldObserve(vols) {
 		st.tracker = atime.NewTracker()
 	}
 	return st
@@ -104,23 +104,26 @@ func newAccessTimeResult(s *atime.Summary) *AccessTimeResult {
 }
 
 // reportAccessTimes prints a one-line access-time summary on stderr when any
-// observed read changed an access time. It is silent with --quiet or --json.
-func reportAccessTimes(cmd *cobra.Command, s *atime.Summary, dryRun bool) {
+// observed read changed an access time. detectionOnly marks a run that wrote
+// no evidence container (a dry run, or one that stopped after detection), so
+// the changes are not recorded anywhere else. It is silent with --quiet or
+// --json.
+func reportAccessTimes(cmd *cobra.Command, s *atime.Summary, detectionOnly bool) {
 	if quiet || collectJSON {
 		return
 	}
-	writeAccessTimeSummary(cmd.ErrOrStderr(), s, dryRun)
+	writeAccessTimeSummary(cmd.ErrOrStderr(), s, detectionOnly)
 }
 
 // writeAccessTimeSummary writes the access-time summary line for s to w.
-func writeAccessTimeSummary(w io.Writer, s *atime.Summary, dryRun bool) {
+func writeAccessTimeSummary(w io.Writer, s *atime.Summary, detectionOnly bool) {
 	if s == nil || s.Modified == 0 {
 		return
 	}
-	if dryRun {
+	if detectionOnly {
 		_, _ = fmt.Fprintf(w,
 			"\nAccess times: %d of %d observed reads during detection changed an access time.\n"+
-				"  A dry run writes no evidence container, so these changes are not recorded.\n",
+				"  No evidence container was written, so these changes are not recorded.\n",
 			s.Modified, s.ObservedReads)
 		return
 	}

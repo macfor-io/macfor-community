@@ -62,7 +62,7 @@ func TestVolumeForSealedSystemVolume(t *testing.T) {
 	}
 }
 
-func TestVolumeForCachesAndDeduplicates(t *testing.T) {
+func TestVolumeForDeduplicates(t *testing.T) {
 	dir := t.TempDir()
 	a, err := VolumeFor(dir)
 	if err != nil {

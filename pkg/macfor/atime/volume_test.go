@@ -26,3 +26,15 @@ func TestAnyMayUpdate(t *testing.T) {
 		t.Error("AnyMayUpdate(one lazy) = false, want true")
 	}
 }
+
+func TestShouldObserve(t *testing.T) {
+	if !ShouldObserve(nil) {
+		t.Error("ShouldObserve(nil) = false, want true: unprobed volumes are treated as unknown")
+	}
+	if ShouldObserve([]Volume{{Policy: PolicyNone}}) {
+		t.Error("ShouldObserve(read-only) = true, want false")
+	}
+	if !ShouldObserve([]Volume{{Policy: PolicyNone}, {Policy: PolicyLazy}}) {
+		t.Error("ShouldObserve(one lazy) = false, want true")
+	}
+}

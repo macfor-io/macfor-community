@@ -15,7 +15,6 @@ package atime
 
 import (
 	"os"
-	"sync"
 
 	"github.com/macfor-io/macfor-community/pkg/macfor"
 )
@@ -70,22 +69,11 @@ type Volume struct {
 	fsid [2]int32
 }
 
-// volumeCache caches probed volumes by filesystem ID.
-var volumeCache sync.Map // map[[2]int32]Volume
-
-// VolumeFor returns the volume that holds path and its access-time policy.
-// Results are cached per volume, so probing many paths on one volume costs
-// one statfs call each and no repeated decoding.
+// VolumeFor returns the volume that holds path and its access-time policy,
+// read with one statfs(2) call. It is not cached: a collection probes a
+// handful of paths once, and a cache would outlive remounts.
 func VolumeFor(path string) (Volume, error) {
-	v, err := statVolume(path)
-	if err != nil {
-		return Volume{}, err
-	}
-	if cached, ok := volumeCache.Load(v.fsid); ok {
-		return cached.(Volume), nil
-	}
-	volumeCache.Store(v.fsid, v)
-	return v, nil
+	return statVolume(path)
 }
 
 // Rooted is implemented by sources that read from a known set of host
@@ -142,6 +130,14 @@ func probePaths(paths []string) []Volume {
 		vols = append(vols, v)
 	}
 	return vols
+}
+
+// ShouldObserve reports whether reads from a source with these volumes
+// should be observed: when any volume may update access times, or when no
+// volume could be probed at all, since an unknown policy is treated as one
+// that may.
+func ShouldObserve(vols []Volume) bool {
+	return len(vols) == 0 || AnyMayUpdate(vols)
 }
 
 // AnyMayUpdate reports whether reads on any of vols may change access times.

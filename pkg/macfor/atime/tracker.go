@@ -123,12 +123,18 @@ var Unobserved = []string{
 type inodeKey struct{ dev, ino uint64 }
 
 // Tracker accumulates the reads observed through its sources. It is safe for
-// concurrent use. Events are buffered until a sink is set, so reads made
-// before the evidence container's chain of custody exists (for example during
-// detection) are delivered once it does.
+// concurrent use.
+//
+// Observed changes are buffered and handed to the sink only by Flush (and
+// SetSink), never from inside a read. A read can happen while the evidence
+// container holds its own lock (for example a reader copied into the
+// container that closes its file at EOF), so delivering from the read would
+// deadlock. Buffering also keeps reads made before the chain of custody
+// exists, such as during detection, until it does.
 type Tracker struct {
-	mu  sync.Mutex
-	now func() time.Time
+	mu      sync.Mutex
+	flushMu sync.Mutex
+	now     func() time.Time
 
 	observed, modified, likely, concurrent, open int
 
@@ -144,19 +150,35 @@ func NewTracker() *Tracker {
 	return &Tracker{now: time.Now, inodes: make(map[inodeKey]*InodeChange)}
 }
 
-// SetSink delivers every buffered event to fn, in observation order, and
-// then every new event as it is observed. A nil fn buffers events again.
+// SetSink sets the function Flush delivers events to and flushes the events
+// buffered so far. A nil fn stops delivery; events then stay buffered.
 func (t *Tracker) SetSink(fn func(Event)) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	t.sink = fn
-	if fn == nil {
+	t.mu.Unlock()
+	t.Flush()
+}
+
+// Flush delivers the buffered events to the sink, in observation order. It
+// does nothing when no sink is set. The sink is called without the
+// tracker's lock held, so it may take locks of its own.
+func (t *Tracker) Flush() {
+	t.flushMu.Lock()
+	defer t.flushMu.Unlock()
+
+	t.mu.Lock()
+	sink, events := t.sink, t.pending
+	if sink != nil {
+		t.pending = nil
+	}
+	t.mu.Unlock()
+
+	if sink == nil {
 		return
 	}
-	for _, e := range t.pending {
-		fn(e)
+	for _, e := range events {
+		sink(e)
 	}
-	t.pending = nil
 }
 
 // Summary returns the totals so far.
@@ -226,9 +248,5 @@ func (t *Tracker) record(e Event) {
 	ic.Changes++
 	ic.LastAfter = e.After
 
-	if t.sink != nil {
-		t.sink(e)
-		return
-	}
 	t.pending = append(t.pending, e)
 }

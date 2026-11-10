@@ -86,11 +86,15 @@ func newLive(t *testing.T) macfor.Source {
 	return src
 }
 
-// collectEvents sets a sink on tr that appends to the returned slice.
-func collectEvents(tr *atime.Tracker) *[]atime.Event {
+// collectEvents sets a sink on tr and returns a function that flushes the
+// tracker and returns every event delivered so far.
+func collectEvents(tr *atime.Tracker) func() []atime.Event {
 	var events []atime.Event
 	tr.SetSink(func(e atime.Event) { events = append(events, e) })
-	return &events
+	return func() []atime.Event {
+		tr.Flush()
+		return events
+	}
 }
 
 func TestOpenReadRecordsAccessTimeChange(t *testing.T) {
@@ -114,15 +118,20 @@ func TestOpenReadRecordsAccessTimeChange(t *testing.T) {
 	}
 	_ = rc.Close() // A second Close must not record again.
 
-	if len(*events) != 1 {
-		t.Fatalf("got %d events, want 1: %+v", len(*events), *events)
+	if len(events()) != 1 {
+		t.Fatalf("got %d events, want 1: %+v", len(events()), events())
 	}
-	e := (*events)[0]
+	e := events()[0]
 	if e.PluginID != "browser.safari" || e.Phase != atime.PhaseCollect || e.Operation != atime.OperationRead {
 		t.Errorf("event context = %q/%q/%q", e.PluginID, e.Phase, e.Operation)
 	}
-	if e.Path != path || e.ResolvedPath != "" {
-		t.Errorf("Path = %q, ResolvedPath = %q", e.Path, e.ResolvedPath)
+	target, _ := filepath.EvalSymlinks(path)
+	wantResolved := target
+	if target == path {
+		wantResolved = ""
+	}
+	if e.Path != path || e.ResolvedPath != wantResolved {
+		t.Errorf("Path = %q, ResolvedPath = %q, want %q", e.Path, e.ResolvedPath, wantResolved)
 	}
 	if e.Attribution != atime.AttributionLikelyCollector {
 		t.Errorf("Attribution = %q, want likely_collector", e.Attribution)
@@ -170,8 +179,8 @@ func TestOpenWithoutReadAndStatRecordNothing(t *testing.T) {
 	}
 	_ = rc.Close()
 
-	if len(*events) != 0 {
-		t.Errorf("got %d events, want none: %+v", len(*events), *events)
+	if len(events()) != 0 {
+		t.Errorf("got %d events, want none: %+v", len(events()), events())
 	}
 	if got := atimeOf(t, path); !got.Equal(oldAtime) {
 		t.Errorf("atime changed by open/stat alone: %v", got)
@@ -208,8 +217,8 @@ func TestConcurrentWriteIsAttributed(t *testing.T) {
 	}
 	_ = rc.Close()
 
-	if len(*events) != 1 || (*events)[0].Attribution != atime.AttributionConcurrentActivity {
-		t.Fatalf("events = %+v, want one concurrent_activity event", *events)
+	if len(events()) != 1 || events()[0].Attribution != atime.AttributionConcurrentActivity {
+		t.Fatalf("events = %+v, want one concurrent_activity event", events())
 	}
 	if s := tr.Summary(); s.ConcurrentActivity != 1 || s.LikelyCollector != 0 {
 		t.Errorf("summary = %+v", s)
@@ -231,10 +240,10 @@ func TestReadDirRecordsDirectoryAccessTime(t *testing.T) {
 	if err != nil || len(entries) != 1 {
 		t.Fatalf("ReadDir = %v, %v", entries, err)
 	}
-	if len(*events) != 1 {
-		t.Fatalf("got %d events, want 1", len(*events))
+	if len(events()) != 1 {
+		t.Fatalf("got %d events, want 1", len(events()))
 	}
-	e := (*events)[0]
+	e := events()[0]
 	if e.Operation != atime.OperationReadDir || e.Path != sub || e.Phase != atime.PhaseDetect {
 		t.Errorf("event = %+v", e)
 	}
@@ -262,6 +271,9 @@ func TestGlobObservesListedDirectoriesAndMatchesFilepathGlob(t *testing.T) {
 		filepath.Join(dir, "u1", "Library", "a.db"),
 		filepath.Join(dir, "nope", "*"),
 		filepath.Join(dir, "u[12]", "Library", "?.db"),
+		filepath.Join(dir, "*", "library", "*.db"), // Wrong case after a wildcard.
+		filepath.Join(dir, "*", "Library") + "/",   // Trailing slash.
+		filepath.Join(dir, "u1", "Library", "*"),
 	} {
 		got, err := src.Glob(pattern)
 		if err != nil {
@@ -277,13 +289,13 @@ func TestGlobObservesListedDirectoriesAndMatchesFilepathGlob(t *testing.T) {
 	}
 
 	var sawLib bool
-	for _, e := range *events {
+	for _, e := range events() {
 		if e.Path == lib1 && e.Operation == atime.OperationReadDir && e.Before.Atime.Equal(oldAtime) {
 			sawLib = true
 		}
 	}
 	if !sawLib {
-		t.Errorf("no readdir event for %s in %+v", lib1, *events)
+		t.Errorf("no readdir event for %s in %+v", lib1, events())
 	}
 }
 
@@ -311,13 +323,19 @@ func TestWalkObservesDirectories(t *testing.T) {
 		t.Errorf("visited %d paths, want 5: %v", len(visited), visited)
 	}
 	var sawA bool
-	for _, e := range *events {
+	for _, e := range events() {
 		if e.Path == a && e.Operation == atime.OperationReadDir {
+			if !e.Before.Atime.Equal(oldAtime) {
+				t.Errorf("walk event Before.Atime = %v, want staged %v", e.Before.Atime, oldAtime)
+			}
 			sawA = true
 		}
 	}
+	if s := tr.Summary(); s.ObservedReads != 3 {
+		t.Errorf("ObservedReads = %d, want 3 (tree, a, b listed once each)", s.ObservedReads)
+	}
 	if !sawA {
-		t.Errorf("no readdir event for %s in %+v", a, *events)
+		t.Errorf("no readdir event for %s in %+v", a, events())
 	}
 }
 
@@ -340,8 +358,8 @@ func TestReadPlistIsObserved(t *testing.T) {
 	if v.Name != "macfor" {
 		t.Errorf("Name = %q", v.Name)
 	}
-	if len(*events) != 1 || (*events)[0].Operation != atime.OperationRead {
-		t.Errorf("events = %+v, want one read event", *events)
+	if len(events()) != 1 || events()[0].Operation != atime.OperationRead {
+		t.Errorf("events = %+v, want one read event", events())
 	}
 	if err := src.ReadPlist(filepath.Join(dir, "missing.plist"), &v); err == nil {
 		t.Error("ReadPlist of a missing file should fail")
@@ -367,8 +385,8 @@ func TestEventsBufferUntilSinkIsSet(t *testing.T) {
 	_ = rc.Close()
 
 	events := collectEvents(tr)
-	if len(*events) != 1 {
-		t.Fatalf("buffered events delivered = %d, want 1", len(*events))
+	if len(events()) != 1 {
+		t.Fatalf("buffered events delivered = %d, want 1", len(events()))
 	}
 }
 
@@ -468,11 +486,11 @@ func TestDirectorySourceReadsAreObserved(t *testing.T) {
 	_, _ = io.ReadAll(rc)
 	_ = rc.Close()
 
-	if len(*events) != 1 {
-		t.Fatalf("got %d events, want 1", len(*events))
+	if len(events()) != 1 {
+		t.Fatalf("got %d events, want 1", len(events()))
 	}
-	if !(*events)[0].Before.Atime.Equal(oldAtime) {
-		t.Errorf("Before.Atime = %v", (*events)[0].Before.Atime)
+	if !events()[0].Before.Atime.Equal(oldAtime) {
+		t.Errorf("Before.Atime = %v", events()[0].Before.Atime)
 	}
 	if got := atimeOf(t, host); got.Equal(oldAtime) {
 		t.Error("host file atime should have changed")
@@ -505,4 +523,90 @@ func BenchmarkObservedOpen(b *testing.B) {
 	b.Run("observed", func(b *testing.B) {
 		run(b, atime.NewTracker().Source(src, "p", atime.PhaseCollect))
 	})
+}
+
+func TestWalkSkippedDirectoriesAreNotCounted(t *testing.T) {
+	dir := t.TempDir()
+	fixture(t, dir, "tree/skip/1.txt", "1")
+	fixture(t, dir, "tree/keep/2.txt", "2")
+
+	tr := atime.NewTracker()
+	src := tr.Source(newLive(t), "p", atime.PhaseCollect)
+	err := src.Walk(filepath.Join(dir, "tree"), func(path string, info macfor.FileInfo, err error) error {
+		if info != nil && info.IsDir() && filepath.Base(path) == "skip" {
+			return filepath.SkipDir
+		}
+		return err
+	})
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if s := tr.Summary(); s.ObservedReads != 2 {
+		t.Errorf("ObservedReads = %d, want 2 (tree and keep; skip is never listed)", s.ObservedReads)
+	}
+}
+
+func TestWalkCallbackReadDirIsNotDoubleCounted(t *testing.T) {
+	dir := t.TempDir()
+	requireAtimeUpdates(t, dir)
+	fixture(t, dir, "tree/1.txt", "1")
+	tree := filepath.Join(dir, "tree")
+	stageOldAtime(t, tree)
+
+	tr := atime.NewTracker()
+	events := collectEvents(tr)
+	src := tr.Source(newLive(t), "p", atime.PhaseCollect)
+	err := src.Walk(tree, func(path string, info macfor.FileInfo, err error) error {
+		if path == tree {
+			_, _ = src.ReadDir(path)
+		}
+		return err
+	})
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	var n int
+	for _, e := range events() {
+		if e.Path == tree {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("got %d events for %s, want 1 (the callback's ReadDir)", n, tree)
+	}
+}
+
+func TestDirectoryGlobNoMatchIsEmptyNotNil(t *testing.T) {
+	dsrc, err := directory.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("directory.New: %v", err)
+	}
+	src := atime.NewTracker().Source(dsrc, "p", atime.PhaseCollect)
+	got, err := src.Glob("/Users/*/nothing")
+	if err != nil || got == nil || len(got) != 0 {
+		t.Errorf("Glob = %#v, %v; want empty non-nil slice like directory.Source.Glob", got, err)
+	}
+	want, _ := dsrc.Glob("/Users/*/nothing")
+	if len(want) != 0 || want == nil {
+		t.Errorf("directory.Source.Glob = %#v; test assumption broken", want)
+	}
+}
+
+func TestDirectoryGlobMatchesDirectorySource(t *testing.T) {
+	root := t.TempDir()
+	for _, p := range []string{"Users/alice/Library/a.db", "Users/bob/Library/b.db", "Users/bob/x.txt"} {
+		fixture(t, root, p, "x")
+	}
+	dsrc, err := directory.New(root)
+	if err != nil {
+		t.Fatalf("directory.New: %v", err)
+	}
+	src := atime.NewTracker().Source(dsrc, "p", atime.PhaseCollect)
+	for _, pattern := range []string{"/Users/*/Library/*.db", "Users/*/x.txt", "/Users/alice/Library/a.db", "/Users/*/library/*.db"} {
+		got, gerr := src.Glob(pattern)
+		want, werr := dsrc.Glob(pattern)
+		if (gerr == nil) != (werr == nil) || !slices.Equal(got, want) {
+			t.Errorf("Glob(%s) = %v, %v; directory.Source.Glob = %v, %v", pattern, got, gerr, want, werr)
+		}
+	}
 }

@@ -76,7 +76,7 @@ func TestWriteAccessTimeSummary(t *testing.T) {
 	buf.Reset()
 	writeAccessTimeSummary(&buf, s, true)
 	if !strings.Contains(buf.String(), "not recorded") {
-		t.Errorf("dry-run summary = %q, want a note that changes are not recorded", buf.String())
+		t.Errorf("detection-only summary = %q, want a note that changes are not recorded", buf.String())
 	}
 
 	for _, quietCase := range []*atime.Summary{nil, {ObservedReads: 5}} {

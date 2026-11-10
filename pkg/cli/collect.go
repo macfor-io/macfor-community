@@ -363,6 +363,7 @@ func runDetectionPhase(ctx context.Context, src macfor.Source, pluginOpts contai
 func handleDetectionResult(cmd *cobra.Command, result *orchestrator.Result, handle *sourceHandle) (bool, error) {
 	if result.Cancelled {
 		logger.Warn().Msg("Collection cancelled by user")
+		reportAccessTimes(cmd, result.AccessTimes, true)
 		return true, context.Canceled
 	}
 
@@ -377,7 +378,9 @@ func handleDetectionResult(cmd *cobra.Command, result *orchestrator.Result, hand
 	}
 
 	if result.ApplicablePlugins() == 0 {
-		return true, outputNoApplicablePlugins(cmd, result)
+		err := outputNoApplicablePlugins(cmd, result)
+		reportAccessTimes(cmd, result.AccessTimes, true)
+		return true, err
 	}
 
 	return false, nil

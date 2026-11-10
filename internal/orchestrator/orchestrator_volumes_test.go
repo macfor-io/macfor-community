@@ -75,7 +75,8 @@ func runCollection(t *testing.T, cfg Config) (string, *Result) {
 }
 
 func TestOrchestrator_RecordsConfiguredVolumes(t *testing.T) {
-	defer registerMockPlugins()()
+	defer restoreRegistry()()
+	registerMockPlugins()
 
 	vols := []atime.Volume{
 		{MountPoint: "/", FSType: "apfs", Flags: []string{"read-only"}, Policy: atime.PolicyNone},
@@ -148,9 +149,7 @@ func TestOrchestrator_RecordsAccessTimeChanges(t *testing.T) {
 		t.Skip("temp volume does not update access times")
 	}
 
-	macfor.ClearRegistry()
-	defer macfor.ClearRegistry()
-	macfor.Register(&readingPlugin{id: "test.reader", path: "/Users/alice/.zsh_history"})
+	defer useOnlyPlugin(&readingPlugin{id: "test.reader", path: "/Users/alice/.zsh_history"})()
 
 	path, result := runCollection(t, Config{Source: mustDirSource(t, root)})
 
@@ -167,6 +166,9 @@ func TestOrchestrator_RecordsAccessTimeChanges(t *testing.T) {
 	}
 	if len(m.Source.Volumes) == 0 {
 		t.Error("source.volumes missing")
+	}
+	if m.AccessTimes.Unclosed != 0 {
+		t.Errorf("unclosed = %d, want 0: a plugin read was never compared", m.AccessTimes.Unclosed)
 	}
 
 	var custody container.ChainOfCustodyLog
@@ -200,9 +202,7 @@ func TestOrchestrator_NoTrackingOnReadOnlyVolumes(t *testing.T) {
 	root := t.TempDir()
 	stageOld(t, filepath.Join(root, "Users/alice/.zsh_history"), "x")
 
-	macfor.ClearRegistry()
-	defer macfor.ClearRegistry()
-	macfor.Register(&readingPlugin{id: "test.reader", path: "/Users/alice/.zsh_history"})
+	defer useOnlyPlugin(&readingPlugin{id: "test.reader", path: "/Users/alice/.zsh_history"})()
 
 	// Volumes claim read-only, so no tracker is created and nothing observed.
 	path, result := runCollection(t, Config{
@@ -227,9 +227,7 @@ func TestOrchestrator_SharedTrackerDeliversEarlierDetectionEvents(t *testing.T) 
 		t.Skip("temp volume does not update access times")
 	}
 
-	macfor.ClearRegistry()
-	defer macfor.ClearRegistry()
-	macfor.Register(&readingPlugin{id: "test.reader", path: "/Users/alice/.zsh_history"})
+	defer useOnlyPlugin(&readingPlugin{id: "test.reader", path: "/Users/alice/.zsh_history"})()
 
 	tr := atime.NewTracker()
 	src := mustDirSource(t, root)
@@ -246,14 +244,18 @@ func TestOrchestrator_SharedTrackerDeliversEarlierDetectionEvents(t *testing.T) 
 	path, _ := runCollection(t, Config{Source: src, AccessTimes: tr})
 	var custody container.ChainOfCustodyLog
 	readZipJSON(t, path, "chain-of-custody.json", &custody)
-	var detectDir int
+	// The dry run's event was observed before the container's collection
+	// started; the collection's own detection pass happens after.
+	started := custody.CreatedAt
+	var fromDryRun int
 	for _, e := range custody.Entries {
-		if e.Action == container.CustodyActionAccessTimeModified && e.Target == "/Users/alice" && e.Details["phase"] == "detect" {
-			detectDir++
+		if e.Action == container.CustodyActionAccessTimeModified && e.Target == "/Users/alice" &&
+			e.Details["phase"] == "detect" && e.Timestamp.Before(started) {
+			fromDryRun++
 		}
 	}
-	if detectDir == 0 {
-		t.Error("the dry-run detection's directory read was not recorded in the container")
+	if fromDryRun != 1 {
+		t.Errorf("dry-run detection events recorded = %d, want 1 (observed before %v)", fromDryRun, started)
 	}
 }
 
@@ -264,4 +266,84 @@ func mustDirSource(t *testing.T, root string) macfor.Source {
 		t.Fatalf("directory.New: %v", err)
 	}
 	return src
+}
+
+// useOnlyPlugin replaces the plugin registry with p and returns a function
+// that restores the previous registry, so these tests do not strip the real
+// plugins from tests that run after them.
+func useOnlyPlugin(p macfor.Plugin) func() {
+	restore := restoreRegistry()
+	macfor.ClearRegistry()
+	macfor.Register(p)
+	return restore
+}
+
+// restoreRegistry snapshots the plugin registry and returns a function that
+// puts it back.
+func restoreRegistry() func() {
+	saved := macfor.All()
+	return func() {
+		macfor.ClearRegistry()
+		for _, p := range saved {
+			macfor.Register(p)
+		}
+	}
+}
+
+// closeAtEOF closes rc when a read reaches EOF, as a streaming reader handed
+// to Collector.AddFile might. The container copies it while holding its own
+// lock, so the observed Close runs under that lock.
+type closeAtEOF struct{ rc io.ReadCloser }
+
+func (c closeAtEOF) Read(p []byte) (int, error) {
+	n, err := c.rc.Read(p)
+	if err == io.EOF {
+		_ = c.rc.Close()
+	}
+	return n, err
+}
+
+// copyingPlugin streams a source file into the container with closeAtEOF.
+type copyingPlugin struct{ readingPlugin }
+
+func (p *copyingPlugin) Collect(ctx context.Context, src macfor.Source, out macfor.Collector) error {
+	rc, err := src.Open(p.path)
+	if err != nil {
+		return err
+	}
+	a, err := macfor.NewArtifact(p.id, "test", "history")
+	if err != nil {
+		return err
+	}
+	a.SourcePath = p.path
+	return out.AddFile(ctx, *a, closeAtEOF{rc})
+}
+
+func TestOrchestrator_CloseInsideContainerCopyDoesNotDeadlock(t *testing.T) {
+	root := t.TempDir()
+	stageOld(t, filepath.Join(root, "Users/alice/.zsh_history"), "history")
+	if !atime.AnyMayUpdate(atime.ProbeSource(mustDirSource(t, root))) {
+		t.Skip("temp volume does not update access times")
+	}
+	defer useOnlyPlugin(&copyingPlugin{readingPlugin{id: "test.copier", path: "/Users/alice/.zsh_history"}})()
+
+	done := make(chan *Result, 1)
+	go func() {
+		_, r := runCollection(t, Config{Source: mustDirSource(t, root)})
+		done <- r
+	}()
+	select {
+	case r := <-done:
+		var streamed bool
+		if r.AccessTimes != nil {
+			for _, ic := range r.AccessTimes.Inodes {
+				streamed = streamed || ic.Path == "/Users/alice/.zsh_history"
+			}
+		}
+		if !streamed {
+			t.Errorf("AccessTimes = %+v, want the streamed read recorded", r.AccessTimes)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("collection deadlocked closing an observed file inside the container's copy")
+	}
 }
