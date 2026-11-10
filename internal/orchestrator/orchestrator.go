@@ -14,6 +14,7 @@ import (
 	"github.com/macfor-io/macfor-community/internal/container"
 	"github.com/macfor-io/macfor-community/pkg/macfor"
 	"github.com/macfor-io/macfor-community/pkg/macfor/artifacts"
+	"github.com/macfor-io/macfor-community/pkg/macfor/atime"
 	"github.com/macfor-io/macfor-community/pkg/macfor/manifestpack"
 )
 
@@ -50,6 +51,11 @@ type Config struct {
 	// container with sensitive values masked. Every plugin ID must be
 	// registered.
 	PluginOptions container.PluginOptions
+
+	// Volumes lists the volumes behind Source and their access-time policies,
+	// recorded in the evidence manifest as source.volumes. When nil, the
+	// orchestrator probes them itself (atime.ProbeSource).
+	Volumes []atime.Volume
 
 	// OnCollectionStart, if set, is called with the container once its
 	// collection metadata, manifest provenance, and license are recorded and
@@ -308,6 +314,9 @@ func (o *Orchestrator) run(ctx context.Context) (*Result, error) {
 	// Set up collection metadata.
 	o.setupCollectionMetadata()
 
+	// Record the volumes behind the source and their access-time policies.
+	o.config.Container.SetVolumes(o.volumes())
+
 	// Record the provenance of the manifest definitions driving this collection.
 	o.recordManifestProvenance(applicablePlugins)
 
@@ -350,6 +359,15 @@ func (o *Orchestrator) run(ctx context.Context) (*Result, error) {
 	})
 
 	return result, nil
+}
+
+// volumes returns the configured source volumes, probing them when none were
+// configured.
+func (o *Orchestrator) volumes() []atime.Volume {
+	if o.config.Volumes != nil {
+		return o.config.Volumes
+	}
+	return atime.ProbeSource(o.config.Source)
 }
 
 // resolvePlugins determines which plugins to run based on configuration.

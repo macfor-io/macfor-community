@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/macfor-io/macfor-community/pkg/macfor"
+	"github.com/macfor-io/macfor-community/pkg/macfor/atime"
 	"github.com/macfor-io/macfor-community/pkg/macfor/manifestpack"
 	macforparquet "github.com/macfor-io/macfor-community/pkg/macfor/parquet"
 )
@@ -32,7 +33,7 @@ const (
 	custodyKeyPlugin = "plugin"
 
 	// containerFormatVersion is the evidence-container format version.
-	containerFormatVersion = "1.4"
+	containerFormatVersion = "1.5"
 )
 
 // ErrPathExists is returned when a file is added at a container path that
@@ -112,6 +113,9 @@ type Container struct {
 	// users holds the user accounts the source enumerated (nil until
 	// SetUsers is called).
 	users []UserAccountInfo
+
+	// volumes is written to the manifest as source.volumes.
+	volumes []atime.Volume
 }
 
 // NewContainer creates a new evidence container using the provided configuration.
@@ -447,6 +451,14 @@ func (c *Container) SetUsers(users []macfor.User) {
 	c.users = infos
 }
 
+// SetVolumes records the volumes behind the source and their access-time
+// policies. They are written to the manifest as source.volumes.
+func (c *Container) SetVolumes(vols []atime.Volume) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.volumes = append([]atime.Volume(nil), vols...)
+}
+
 // AddPluginSummary adds a plugin execution summary to the manifest.
 // This should be called after each plugin completes collection.
 func (c *Container) AddPluginSummary(summary PluginSummary) {
@@ -509,6 +521,7 @@ func (c *Container) Finalize() error {
 	}
 	c.manifest.CompletedAt = now
 	c.manifest.Source.Users = c.users
+	c.manifest.Source.Volumes = c.volumes
 	c.manifest.Statistics.UsersProcessed = len(c.users)
 
 	// Ensure custody log exists

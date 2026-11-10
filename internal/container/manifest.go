@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/macfor-io/macfor-community/pkg/macfor"
+	"github.com/macfor-io/macfor-community/pkg/macfor/atime"
 	"github.com/macfor-io/macfor-community/pkg/macfor/manifestpack"
 )
 
@@ -79,6 +80,12 @@ type SourceInfo struct {
 	// home directories plugins collected from. It is null when enumeration
 	// failed and empty when the source has no user accounts.
 	Users []UserAccountInfo `json:"users"`
+
+	// Volumes lists the volumes behind the source and the access-time policy
+	// of each (container format 1.5): whether reading files on that volume
+	// can update their access times. It is absent when no volume could be
+	// probed.
+	Volumes []atime.Volume `json:"volumes,omitempty"`
 }
 
 // UserAccountInfo describes one user account enumerated from the source.
