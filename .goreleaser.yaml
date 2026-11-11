@@ -47,30 +47,27 @@ homebrew_casks:
     homepage: https://macfor.io/
     description: Forensic artifact collector
     directory: Casks
+    # GoReleaser only renders the cask (dist/homebrew/Casks/macfor.rb). The
+    # "Publish Homebrew cask" step in .github/workflows/release.yml runs
+    # `brew style --fix` on it and pushes it to the tap, because GoReleaser's
+    # template doesn't pass Homebrew's current style checks (Cask/StanzaGrouping
+    # after livecheck). The repository is still required to render the cask.
     repository:
       owner: macfor-io
       name: homebrew-tap
       branch: main
-      # Pushed over SSH with a write deploy key scoped to the tap.
-      git:
-        url: git@github.com:macfor-io/homebrew-tap.git
-        private_key: "{{ .Env.HOMEBREW_TAP_DEPLOY_KEY }}"
-    commit_author:
-      name: Macfor
-      email: macforio@proton.me
-    commit_msg_template: "macfor {{ .Tag }}"
-    # Prereleases stay out of the tap.
-    skip_upload: auto
+    skip_upload: true
     caveats: |
       macfor needs Full Disk Access (grant it to your terminal) and usually
       sudo to read protected artifacts.
     hooks:
       post:
         # Release binaries are unsigned; clear quarantine so Gatekeeper
-        # doesn't block the first run.
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/macfor"]
+        # doesn't block the first run. install_steps (GoReleaser v2.19+)
+        # renders postflight_steps, which Homebrew requires over postflight.
+        install_steps: |
+          on_macos do
+            run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ .StagedPath }}/macfor"]
           end
 
 checksum:

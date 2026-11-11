@@ -31,4 +31,50 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # GoReleaser renders the cask but doesn't push it (skip_upload: true):
+      # its template fails Homebrew's current style checks, so the cask is
+      # autocorrected with `brew style --fix` first. Prereleases stay out of
+      # the tap.
+      - name: Publish Homebrew cask
+        if: ${{ !contains(github.ref_name, '-') }}
+        env:
           HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+          HOMEBREW_NO_INSTALL_CLEANUP: '1'
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          cask=dist/homebrew/Casks/macfor.rb
+          test -s "$cask"
+
+          # Pushed over SSH with a write deploy key scoped to the tap.
+          key="$RUNNER_TEMP/tap_deploy_key"
+          trap 'rm -f "$key"' EXIT
+          (umask 077 && printf '%s\n' "$HOMEBREW_TAP_DEPLOY_KEY" > "$key")
+          export GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -F /dev/null"
+
+          tap="$RUNNER_TEMP/homebrew-tap"
+          git clone --depth 1 --branch main git@github.com:macfor-io/homebrew-tap.git "$tap"
+          cp "$cask" "$tap/Casks/macfor.rb"
+
+          # Lint as tap CI does: tap the checkout, then autocorrect. An
+          # offense --fix can't correct is reported but doesn't block the
+          # cask, so `brew install` still gets the release.
+          mkdir -p "$(brew --repository)/Library/Taps/macfor-io"
+          ln -sfn "$tap" "$(brew --repository)/Library/Taps/macfor-io/homebrew-tap"
+          # --fix exits non-zero whenever it found an offense, even one it
+          # corrected, so re-lint to see whether anything is left.
+          brew style --fix macfor-io/tap || true
+          if ! brew style macfor-io/tap; then
+            echo "::warning title=Homebrew cask::brew style found offenses --fix could not correct; tap CI will fail."
+          fi
+
+          cd "$tap"
+          git add Casks/macfor.rb
+          if git diff --cached --quiet; then
+            echo "Cask already up to date."
+            exit 0
+          fi
+          git -c user.name=Macfor -c user.email=macforio@proton.me commit -m "macfor $TAG"
+          git push origin HEAD:main
