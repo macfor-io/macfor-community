@@ -779,8 +779,8 @@ func TestContainer_SetCollectionMetadataWithSystemInfo(t *testing.T) {
 	}
 
 	// Verify manifest version is 1.2.
-	if c.manifest.Version != "1.4" {
-		t.Errorf("Version = %q, want %q", c.manifest.Version, "1.4")
+	if c.manifest.Version != "1.5" {
+		t.Errorf("Version = %q, want %q", c.manifest.Version, "1.5")
 	}
 }
 

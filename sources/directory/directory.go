@@ -90,6 +90,13 @@ func validateRoot(root string) (string, error) {
 	return abs, nil
 }
 
+// Roots returns the absolute host directories the source reads from, in
+// precedence order. The collector probes their volumes for an access-time
+// policy before reading.
+func (s *Source) Roots() []string {
+	return append([]string(nil), s.roots...)
+}
+
 // Type returns SourceTypeDirectory indicating this is a directory tree source.
 func (s *Source) Type() macfor.SourceType {
 	return macfor.SourceTypeDirectory

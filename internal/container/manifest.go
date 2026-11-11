@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/macfor-io/macfor-community/pkg/macfor"
+	"github.com/macfor-io/macfor-community/pkg/macfor/atime"
 	"github.com/macfor-io/macfor-community/pkg/macfor/manifestpack"
 )
 
@@ -53,6 +54,12 @@ type Manifest struct {
 	// or a file, and values of secret-looking keys, are masked as "[set]";
 	// other values are recorded verbatim so the collection is reproducible.
 	PluginOptions map[string]map[string]string `json:"plugin_options,omitempty"`
+
+	// AccessTimes summarises the reads the collector observed and the
+	// access-time changes it saw (container format 1.5). Each change is also
+	// an access_time_modified chain-of-custody event. It is absent when no
+	// read was observed, for example when every source volume is read-only.
+	AccessTimes *atime.Summary `json:"access_times,omitempty"`
 }
 
 // SourceInfo contains information about the source system being collected.
@@ -79,6 +86,12 @@ type SourceInfo struct {
 	// home directories plugins collected from. It is null when enumeration
 	// failed and empty when the source has no user accounts.
 	Users []UserAccountInfo `json:"users"`
+
+	// Volumes lists the volumes behind the source and the access-time policy
+	// of each (container format 1.5): whether reading files on that volume
+	// can update their access times. It is absent when no volume could be
+	// probed.
+	Volumes []atime.Volume `json:"volumes,omitempty"`
 }
 
 // UserAccountInfo describes one user account enumerated from the source.
@@ -386,6 +399,11 @@ const (
 
 	// CustodyActionImageDetached records a disk image detached after collection.
 	CustodyActionImageDetached = "image_detached"
+
+	// CustodyActionAccessTimeModified records an observed read after which a
+	// source file's or directory's access time had changed, with the stat
+	// taken before and after the read.
+	CustodyActionAccessTimeModified = "access_time_modified"
 
 	// CustodyActionImageDetachFailed records a failed attempt to detach a disk
 	// image after collection.
